@@ -1,11 +1,11 @@
 import argparse
-import imp
+# import imp
 from multiprocessing.context import ForkContext
 import os
 import math
-import numba
-import time
-import random
+# import numba
+# import time
+# import random
 import numpy as np
 import skimage
 import torch
@@ -13,17 +13,17 @@ from torchvision.utils import save_image
 import copy
 from PIL import Image, ImageDraw, ImageFont
 import pandas
-from gym.spaces import Box
-from gym.spaces import Dict as SpaceDict
-from gym.spaces import Discrete
-import matplotlib.pyplot as plt
+# from gym.spaces import Box
+# from gym.spaces import Dict as SpaceDict
+# from gym.spaces import Discrete
+# import matplotlib.pyplot as plt
 from matplotlib import colors
 import colorsys
 
 import habitat
 from habitat.config import Config
 from habitat.core.agent import Agent
-from habitat.utils.geometry_utils import (
+from habitat.tasks.utils import (
     quaternion_from_coeff,
     quaternion_rotate_vector,
 )
@@ -41,7 +41,7 @@ from pslpython.partition import Partition
 from pslpython.predicate import Predicate
 from pslpython.rule import Rule
 
-from .scenegraph import SceneGraph
+from scenegraph import SceneGraph
 
 
 ADDITIONAL_PSL_OPTIONS = {
@@ -180,23 +180,23 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         """
         if self.args.reasoning in ['both', 'obj']:
 
-            predicate = Predicate('IsNearObj', closed = True, size = 2)
+            predicate = Predicate('IsNearObj', size = 2)
             model.add_predicate(predicate)
             
-            predicate = Predicate('ObjCooccur', closed = True, size = 1)
+            predicate = Predicate('ObjCooccur', size = 1)
             model.add_predicate(predicate)
         if self.args.reasoning in ['both', 'room']:
 
-            predicate = Predicate('IsNearRoom', closed = True, size = 2)
+            predicate = Predicate('IsNearRoom', size = 2)
             model.add_predicate(predicate)
             
-            predicate = Predicate('RoomCooccur', closed = True, size = 1)
+            predicate = Predicate('RoomCooccur', size = 1)
             model.add_predicate(predicate)
         
-        predicate = Predicate('Choose', closed = False, size = 1)
+        predicate = Predicate('Choose', size = 1)
         model.add_predicate(predicate)
         
-        predicate = Predicate('ShortDist', closed = True, size = 1)
+        predicate = Predicate('ShortDist', size = 1)
         model.add_predicate(predicate)
         
     def add_rules(self, model):

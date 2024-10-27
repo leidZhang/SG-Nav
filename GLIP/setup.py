@@ -55,6 +55,8 @@ def get_extensions():
 
     return ext_modules
 
+if not os.path.exists("maskrcnn_benchmark"):
+    os.makedirs("maskrcnn_benchmark")
 
 setup(
     name="maskrcnn_benchmark",
