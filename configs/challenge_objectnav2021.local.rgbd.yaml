@@ -28,8 +28,8 @@ SIMULATOR:
     HEIGHT: 480
     HFOV: 79
     NORMALIZE_DEPTH: False
-    MIN_DEPTH: 0.5
-    MAX_DEPTH: 5.0
+    MIN_DEPTH: 0 # 0.5
+    MAX_DEPTH: 10 # 5.0
     POSITION: [0, 0.88, 0]
 TASK:
   TYPE: ObjectNav-v1

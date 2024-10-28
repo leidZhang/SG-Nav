@@ -1,6 +1,6 @@
 import os
 import sys
-sys.path.append('/your/path/to/concept-graphs/conceptgraph')
+sys.path.append('/home/sdcnlab025/Embodied_AI/concept-graphs')
 import cv2
 import numpy as np
 import torch
@@ -24,7 +24,7 @@ from omegaconf import DictConfig
 from pathlib import PosixPath
 from pathlib import Path
 from supervision.draw.color import Color, ColorPalette
-from conceptgraph.llava.llava_model import LLaVA
+from conceptgraph.llava.llava_model import LLaVaChat as LLaVA
 # from conceptgraph.utils.general_utils import to_tensor, to_numpy, Timer
 from conceptgraph.slam.slam_classes import MapObjectList, DetectionList
 from conceptgraph.slam.utils import (
