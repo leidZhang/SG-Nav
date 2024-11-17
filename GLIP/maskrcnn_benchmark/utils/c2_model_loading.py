@@ -159,7 +159,7 @@ def _rename_conv_weights_for_deformable_conv_layers(state_dict, cfg):
             if r is None:
                 continue
             for param in ["weight", "bias"]:
-                if old_key.find(param) is -1:
+                if old_key.find(param) == -1:
                     continue
                 new_key = old_key.replace(
                     "conv2.{}".format(param), "conv2.conv.{}".format(param)

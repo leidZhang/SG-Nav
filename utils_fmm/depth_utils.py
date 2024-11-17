@@ -12,6 +12,7 @@ def get_camera_matrix(width, height, fov):
     f = (width / 2.) / np.tan(np.deg2rad(fov / 2.))
     camera_matrix = {'xc': xc, 'zc': zc, 'f': f}
     camera_matrix = Namespace(**camera_matrix)
+    
     return camera_matrix
 
 

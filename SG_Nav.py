@@ -1,11 +1,9 @@
+# import warnings
+# warnings.filterwarnings("ignore")
+
 import argparse
-# import imp
-from multiprocessing.context import ForkContext
 import os
 import math
-# import numba
-# import time
-# import random
 import numpy as np
 import skimage
 import torch
@@ -13,23 +11,21 @@ from torchvision.utils import save_image
 import copy
 from PIL import Image, ImageDraw, ImageFont
 import pandas
-# from gym.spaces import Box
-# from gym.spaces import Dict as SpaceDict
-# from gym.spaces import Discrete
-# import matplotlib.pyplot as plt
 from matplotlib import colors
 import colorsys
+from typing import List
 
-import habitat
-from habitat.config import Config
-from habitat.core.agent import Agent
-from habitat.tasks.utils import (
-    quaternion_from_coeff,
-    quaternion_rotate_vector,
-)
+import quaternion
 from GLIP.maskrcnn_benchmark.engine.predictor_glip import GLIPDemo
 from GLIP.maskrcnn_benchmark.config import cfg as glip_cfg
 from utils_glip import *
+
+# import habitat
+# from habitat.core.agent import Agent
+# from habitat.utils.geometry_utils import (
+#     quaternion_from_coeff,
+#     quaternion_rotate_vector,
+# )
 
 from utils_fmm.fmm_planner import FMMPlanner
 from utils_fmm.mapping import Semantic_Mapping
@@ -52,6 +48,34 @@ ADDITIONAL_CLI_OPTIONS = [
     # '--postgres'
 ]
 
+def quaternion_from_coeff(coeffs: List[float]) -> quaternion.quaternion:
+    r"""Creates a quaternions from coeffs in [x, y, z, w] format"""
+    quat = quaternion.quaternion(0, 0, 0, 0)
+    quat.real = coeffs[3]
+    quat.imag = coeffs[0:3]
+    return quat
+
+
+def quaternion_rotate_vector(
+    quat: quaternion.quaternion, v: np.ndarray
+) -> np.ndarray:
+    r"""Rotates a vector by a quaternion
+    Args:
+        quaternion: The quaternion to rotate by
+        v: The vector to rotate
+    Returns:
+        np.ndarray: The rotated vector
+    """
+    vq = quaternion.quaternion(0, 0, 0, 0)
+    vq.imag = v
+    return (quat * vq * quat.inverse()).imag
+
+
+class Agent:
+    def __init__(self) -> None:
+        pass
+
+
 class CLIP_LLM_FMMAgent_NonPano(Agent):
     """
     New in this version: 
@@ -59,7 +83,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
     experiments: v4_4
     """
     def __init__(self, task_config, args=None):
-        self._POSSIBLE_ACTIONS = task_config.TASK.POSSIBLE_ACTIONS
+        # self._POSSIBLE_ACTIONS = task_config.TASK.POSSIBLE_ACTIONS
         self.config = task_config
         self.args = args
         self.panoramic = []
@@ -163,7 +187,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
 
         ### ----- load scene graph module ----- ###
         self.goal_verification = True
-        self.scenegraph = SceneGraph(agent=self)
+        self.scenegraph: SceneGraph = SceneGraph(agent=self)
 
         self.experiment_name = 'experiment_0'
 
@@ -250,7 +274,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         self.history_pose = []
         self.loop_time = 0
         self.stuck_time = 0
-        self.found_goal_times_threshold = self.threshold_list[self.benchmark._env.current_episode.object_category]
+        self.found_goal_times_threshold = 100 # self.threshold_list[self.benchmark._env.current_episode.object_category]
         ###########
         self.current_obj_predictions = []
         self.obj_locations = [[] for i in range(21)] # length equal to all the objects in reference matrix 
@@ -270,7 +294,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         self.total_stuck_steps = 0
         self.scenegraph.reset()
         
-        os.system(f'rm -r {self.save_image_dir}')
+        # os.system(f'rm -r {self.save_image_dir}')
         
     def detect_objects(self, observations):
         """
@@ -374,10 +398,18 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         observations: 
         """ 
         # if self.total_steps >= 482:  # due to using turning 60 degree action at the beginning. 
+        # print(observations.keys())
+        # print("Prompts GPT", self.scenegraph.prompt_gpt)
+        # print("Prompts LLaVa", self.scenegraph.prompt_llava)
+        # print("Prompts edge proposal", self.scenegraph.prompt_edge_proposal)
+        # print("Prompts score subgraph", self.scenegraph.prompt_score_subgraph)
+        # print("Prompts discriminate relation", self.scenegraph.prompt_discriminate_relation)
+
         if self.total_steps >= 500:  # 230 is setted by someone
             return {"action": 0}
         
         self.total_steps += 1
+        print(f"act {self.total_steps}")
         if self.navigate_steps == 0:
             self.obj_goal = projection[int(observations["objectgoal"])]
             self.prob_array_room = self.co_occur_room_mtx[self.goal_idx[self.obj_goal]]
@@ -405,10 +437,9 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         self.rgb = observations["rgb"][:,:,[2,1,0]]
         observations["rgb_annotated"] = observations["rgb"]
 
-        self.scenegraph.update_observation(observations)
-        
-        self.update_map(observations)
-        self.update_free_map(observations)
+        self.scenegraph.update_observation(observations) # VLM and LLM update scenegraph here
+        self.update_map(observations) # some kind of map update
+        self.update_free_map(observations) # some kind of map update
         
         if self.args.visulize and False:  # Falsed by someone
             input_pose = np.zeros(7)
@@ -418,6 +449,9 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
             save_image((gray_map / gray_map.max()), 'figures/map/img'+str(self.total_steps)+'.png')
             save_image(torch.from_numpy(observations["rgb"]/255).float().permute(2,0,1), 'figures/rgb/img'+str(self.total_steps)+'.png')
             save_image(torch.from_numpy(observations["depth"]/5).float().permute(2,0,1).float(), 'figures/dist/d'+str(self.navigate_steps)+'.png')
+        
+        # NOTE: Hardcoding to ajust the view angles of the semantic mapping modules
+        # NOTE: Initial 22 total steps seems fixed
         # look down twice and look around at first to initialize map
         if self.total_steps == 1:
             # look down
@@ -426,7 +460,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
             # self.observed_map_module.set_view_angles(30)
             return {"action": 5}
         elif self.total_steps <= 7:
-            return {"action": 6}
+            return {"action": 4} # {"action": 6}
         elif self.total_steps == 8:
             # look down
             self.sem_map_module.set_view_angles(60)
@@ -434,12 +468,12 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
             # self.observed_map_module.set_view_angles(60)
             return {"action": 5}
         elif self.total_steps <= 14:
-            return {"action": 6}
+            return {"action": 4} # {"action": 6}
         elif self.total_steps <= 15:
             self.sem_map_module.set_view_angles(30)
             self.free_map_module.set_view_angles(30)
             # self.observed_map_module.set_view_angles(30)
-            return {"action": 4}
+            return {"action": 4} #
         elif self.total_steps <= 16:
             self.sem_map_module.set_view_angles(0)
             self.free_map_module.set_view_angles(0)
@@ -453,9 +487,8 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
             room_detection_result = self.glip_demo.inference(observations["rgb"][:,:,[2,1,0]], rooms_captions)
             self.update_room_map(observations, room_detection_result)
             if not self.found_goal: # if found a goal, directly go to it
-                return {"action": 6}
+                return {"action": 4} # {"action": 6}
                     
-        
         if not (observations["gps"] == self.last_gps).all():
             self.move_steps += 1
             self.not_move_steps = 0
@@ -541,7 +574,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
             self.using_random_goal = True
             stg_y, stg_x, number_action = self._plan(traversible, self.goal_map, self.full_pose, cur_start, cur_start_o, self.found_goal)
         
-        # ------------------------------
+        # ------------------------------ visualization -------------------------
         if self.args.visulize:
             save_map = copy.deepcopy(torch.from_numpy(traversible))
             gray_map = torch.stack((save_map, save_map, save_map))
@@ -587,15 +620,15 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
             paper_map_trans = paper_map_trans / paper_map_trans.max()
             rgb = torch.from_numpy(observations["rgb_annotated"] / 255).float().permute(2, 0, 1)
             text_image = torch.ones(rgb.shape[0], paper_map_trans.shape[1] - rgb.shape[1], rgb.shape[2])
-            metrics = self.benchmark._env.get_metrics()
-            text = [
-                'episode_id: {}'.format(self.benchmark._env.current_episode.episode_id),
-                'episode: {}'.format(self.benchmark._env.current_episode.goals_key),
-                'object_category: {}'.format(self.benchmark._env.current_episode.object_category),
-                'geodesic_distance: {}'.format(self.benchmark._env.current_episode.info['geodesic_distance']),
-                'euclidean_distance: {}'.format(self.benchmark._env.current_episode.info['euclidean_distance']),
-            ]
-            paper_map_trans = self.add_text(paper_map_trans, text)
+            # metrics = self.benchmark._env.get_metrics()
+            # text = [
+            #     'episode_id: {}'.format(self.benchmark._env.current_episode.episode_id),
+            #     'episode: {}'.format(self.benchmark._env.current_episode.goals_key),
+            #     'object_category: {}'.format(self.benchmark._env.current_episode.object_category),
+            #     'geodesic_distance: {}'.format(self.benchmark._env.current_episode.info['geodesic_distance']),
+            #     'euclidean_distance: {}'.format(self.benchmark._env.current_episode.info['euclidean_distance']),
+            # ]
+            # paper_map_trans = self.add_text(paper_map_trans, text)
             rgb = torch.cat([rgb, text_image], dim=1)
             self.agent_state_image = torch.cat([paper_map_trans, rgb], dim=2)
 
@@ -612,7 +645,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
 
         self.last_loc = copy.deepcopy(self.full_pose)
         self.prev_action = number_action
-        self.navigate_steps += 1
+        self.navigate_steps += 1 # NOTE: The steps after the first 22 steps?
         torch.cuda.empty_cache()
         
         return {"action": number_action}
@@ -1166,18 +1199,21 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         # frontier_map[skimage.morphology.binary_dilation(frontier_map, selem)] = 1
         # paper_map_trans[(frontier_map==1)*(paper_map_trans[:,:,0]==torch.tensor(unknown_rgb)[0]).numpy(),:] = color_map[(frontier_map==1)*(paper_map_trans[:,:,0]==torch.tensor(unknown_rgb)[0]).numpy(),:]
         return paper_map_trans
+    
+    def set_benchmark(self, benchmark):
+        self.benchmark = benchmark
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--evaluation", type=str, choices=["local", "remote"]
+        "--evaluation", default="local", type=str, choices=["local", "remote"]
     )
     parser.add_argument(
         "--PSL_infer", default="one_hot", type=str, choices=["optim", "one_hot"]
     )
     parser.add_argument(
-        "--reasoning", default="obj", type=str, choices=["both", "room", "obj"]
+        "--reasoning", default="both", type=str, choices=["both", "room", "obj"]
     )
     parser.add_argument(
         "--llm", default="deberta", type=str, choices=["deberta", "chatgpt"]
@@ -1198,16 +1234,22 @@ def main():
     if args.error_analysis:
         os.environ["CHALLENGE_CONFIG_FILE"] = "configs/error_analysis_config.yaml"
     else:
-        os.environ["CHALLENGE_CONFIG_FILE"] = "configs/challenge_objectnav2021.local.rgbd.yaml"
+        os.environ["CHALLENGE_CONFIG_FILE"] = "configs/objectnav_hm3d.yaml"
     config_paths = os.environ["CHALLENGE_CONFIG_FILE"]
     config = habitat.get_config(config_paths)
+
     agent = CLIP_LLM_FMMAgent_NonPano(task_config=config, args=args)
+    print("agent initialization complete")
 
     if args.evaluation == "local":
-        challenge = habitat.Challenge(eval_remote=False, split_l=args.split_l, split_r=args.split_r)
+        print("Evaluate locally")
+        challenge = habitat.Challenge(eval_remote=False) #, split_l=args.split_l, split_r=args.split_r)
     else:
+        print("Evaluate remotely")
         challenge = habitat.Challenge(eval_remote=True)
 
+    agent.set_benchmark(challenge)
+    print(f"Starting evaluation...")
     challenge.submit(agent)
 
 

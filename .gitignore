@@ -166,3 +166,4 @@ assets/
 *.html
 wandb/
 GLIP/MODEL/
+data/

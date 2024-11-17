@@ -69,7 +69,7 @@ def im_detect_bbox(model, images, target_scale, target_max_size, device,
     """
     Performs bbox detection on the original image.
     """
-    if cfg.INPUT.FORMAT is not '':
+    if cfg.INPUT.FORMAT != '':
         input_format = cfg.INPUT.FORMAT
     elif cfg.INPUT.TO_BGR255:
         input_format = 'bgr255'
@@ -99,7 +99,7 @@ def im_detect_bbox_hflip(model, images, target_scale, target_max_size, device,
     Performs bbox detection on the horizontally flipped image.
     Function signature is the same as for im_detect_bbox.
     """
-    if cfg.INPUT.FORMAT is not '':
+    if cfg.INPUT.FORMAT != '':
         input_format = cfg.INPUT.FORMAT
     elif cfg.INPUT.TO_BGR255:
         input_format = 'bgr255'
