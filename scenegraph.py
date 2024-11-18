@@ -3,7 +3,7 @@ import sys
 import math
 import json
 from copy import deepcopy
-from collections import Counter 
+from collections import Counter
 
 sys.path.append('/home/exx/Desktop/embodied_ai/concept-graphs')
 import cv2
@@ -66,7 +66,7 @@ class Node():
 
     def remove_edge(self, edge):
         self.edges.discard(edge)
-    
+
     def update_caption(self, new_caption):
         for edge in list(self.edges):
             edge.delete()
@@ -138,22 +138,22 @@ class SceneGraph():
         # self.cfg = get_cfg()
         # self.cfg = self.process_cfg(self.cfg)
         self.cfg = self.get_cfg()
-        
+
         self.segment2d_results = []
         self.max_detections_per_object = 10
         self.reason = ''
         self.prompt_llava = '''
             You are an AI assistant witho commonsense and strong ability to identify the
-            largest object in an indoor scene. 
+            largest object in an indoor scene.
 
             You need to provide the name of the largest object in the picture. Here is 2 example:
             1.
             You find that the largest object in the picture is a dog
-            Response: Dog 
-            2. 
+            Response: Dog
+            2.
             You find that the largest object in the picture is a whilte pipe
             Response: Pipe
-        ''' # get the captions 
+        ''' # get the captions
         self.prompt_gpt = '''
             You are an AI assistant with commonsense and strong ability to compare the object and goal,
             then give the category relationship between them.
@@ -232,19 +232,19 @@ class SceneGraph():
 
     def get_cfg(self):
         cfg = {
-            'dataset_root': PosixPath('/your/path/to/Replica'), 
-            'dataset_config': PosixPath('/your/path/to/concept-graphs/conceptgraph/dataset/dataconfigs/replica/replica.yaml'), 
-            'scene_id': 'room0', 'start': 0, 'end': -1, 'stride': 5, 'image_height': 680, 
-            'image_width': 1200, 'gsa_variant': 'none', 'detection_folder_name': 'gsa_detections_${gsa_variant}', 
-            'det_vis_folder_name': 'gsa_vis_${gsa_variant}', 'color_file_name': 'gsa_classes_${gsa_variant}', 'device': 'cuda', 
-            'use_iou': True, 'spatial_sim_type': 'overlap', 'phys_bias': 0.0, 'match_method': 'sim_sum', 'semantic_threshold': 0.5, 
-            'physical_threshold': 0.5, 'sim_threshold': 1.2, 'use_contain_number': False, 'contain_area_thresh': 0.95, 
-            'contain_mismatch_penalty': 0.5, 'mask_area_threshold': 25, 'mask_conf_threshold': 0.95, 'max_bbox_area_ratio': 0.5, 
-            'skip_bg': True, 'min_points_threshold': 16, 'downsample_voxel_size': 0.025, 'dbscan_remove_noise': True, 
-            'dbscan_eps': 0.1, 'dbscan_min_points': 10, 'obj_min_points': 0, 'obj_min_detections': 3, 'merge_overlap_thresh': 0.7, 
-            'merge_visual_sim_thresh': 0.8, 'merge_text_sim_thresh': 0.8, 'denoise_interval': 20, 'filter_interval': -1, 
-            'merge_interval': 20, 'save_pcd': True, 'save_suffix': 'overlap_maskconf0.95_simsum1.2_dbscan.1_merge20_masksub', 
-            'vis_render': False, 'debug_render': False, 'class_agnostic': True, 'save_objects_all_frames': True, 
+            'dataset_root': PosixPath('/your/path/to/Replica'),
+            'dataset_config': PosixPath('/your/path/to/concept-graphs/conceptgraph/dataset/dataconfigs/replica/replica.yaml'),
+            'scene_id': 'room0', 'start': 0, 'end': -1, 'stride': 5, 'image_height': 680,
+            'image_width': 1200, 'gsa_variant': 'none', 'detection_folder_name': 'gsa_detections_${gsa_variant}',
+            'det_vis_folder_name': 'gsa_vis_${gsa_variant}', 'color_file_name': 'gsa_classes_${gsa_variant}', 'device': 'cuda',
+            'use_iou': True, 'spatial_sim_type': 'overlap', 'phys_bias': 0.0, 'match_method': 'sim_sum', 'semantic_threshold': 0.5,
+            'physical_threshold': 0.5, 'sim_threshold': 1.2, 'use_contain_number': False, 'contain_area_thresh': 0.95,
+            'contain_mismatch_penalty': 0.5, 'mask_area_threshold': 25, 'mask_conf_threshold': 0.95, 'max_bbox_area_ratio': 0.5,
+            'skip_bg': True, 'min_points_threshold': 16, 'downsample_voxel_size': 0.025, 'dbscan_remove_noise': True,
+            'dbscan_eps': 0.1, 'dbscan_min_points': 10, 'obj_min_points': 0, 'obj_min_detections': 3, 'merge_overlap_thresh': 0.7,
+            'merge_visual_sim_thresh': 0.8, 'merge_text_sim_thresh': 0.8, 'denoise_interval': 20, 'filter_interval': -1,
+            'merge_interval': 20, 'save_pcd': True, 'save_suffix': 'overlap_maskconf0.95_simsum1.2_dbscan.1_merge20_masksub',
+            'vis_render': False, 'debug_render': False, 'class_agnostic': True, 'save_objects_all_frames': True,
             'render_camera_path': 'replica_room0.json', 'max_num_points': 512
         }
         cfg = DictConfig(cfg)
@@ -271,17 +271,17 @@ class SceneGraph():
             raise NotImplementedError
         else:
             raise NotImplementedError
-    
+
     def get_sam_segmentation_dense(
         self, variant:str, model, image: np.ndarray
     ) -> tuple:
         '''
         The SAM based on automatic mask generation, without bbox prompting
-        
+
         Args:
             model: The mask generator or the YOLO model
             image: )H, W, 3), in RGB color space, in range [0, 255]
-            
+
         Returns:
             mask: (N, H, W)
             xyxy: (N, 4)
@@ -321,16 +321,16 @@ class SceneGraph():
 
     def compute_clip_features(self, image, detections, clip_model, clip_preprocess, clip_tokenizer, classes, device):
         backup_image = image.copy()
-        
+
         image = Image.fromarray(image)
-        
+
         padding = 20  # Adjust the padding amount as needed
-        
+
         image_crops = []
         image_feats = []
         text_feats = []
 
-        
+
         for idx in range(len(detections.xyxy)):
             # Get the crop of the mask with padding
             x_min, y_min, x_max, y_max = detections.xyxy[idx]
@@ -349,29 +349,29 @@ class SceneGraph():
             y_max += bottom_padding
 
             cropped_image = image.crop((x_min, y_min, x_max, y_max))
-            
-            # Get the preprocessed image for clip from the crop 
+
+            # Get the preprocessed image for clip from the crop
             print('            encode_image...')
             preprocessed_image = clip_preprocess(cropped_image).unsqueeze(0).to("cuda")
 
             crop_feat = clip_model.encode_image(preprocessed_image)
             crop_feat /= crop_feat.norm(dim=-1, keepdim=True)
             self.clear_line()
-            
+
             print('            encode_text...')
             class_id = detections.class_id[idx]
             tokenized_text = clip_tokenizer([classes[class_id]]).to("cuda")
             text_feat = clip_model.encode_text(tokenized_text)
             text_feat /= text_feat.norm(dim=-1, keepdim=True)
             self.clear_line()
-            
+
             crop_feat = crop_feat.cpu().numpy()
             text_feat = text_feat.cpu().numpy()
 
             image_crops.append(cropped_image)
             image_feats.append(crop_feat)
             text_feats.append(text_feat)
-            
+
         # turn the list of feats into np matrices
         image_feats = np.concatenate(image_feats, axis=0)
         text_feats = np.concatenate(text_feats, axis=0)
@@ -380,16 +380,16 @@ class SceneGraph():
 
     def vis_result_fast(
         self,
-        image: np.ndarray, 
-        detections: Detections, 
-        classes: list, 
-        color = ColorPalette.DEFAULT, 
+        image: np.ndarray,
+        detections: Detections,
+        classes: list,
+        color = ColorPalette.DEFAULT,
         instance_random_color: bool = False,
         draw_bbox: bool = True,
     ) -> np.ndarray:
         '''
-        Annotate the image with the detection results. 
-        This is fast but of the same resolution of the input image, thus can be blurry. 
+        Annotate the image with the detection results.
+        This is fast but of the same resolution of the input image, thus can be blurry.
         '''
         # annotate image with detections
         box_annotator = BoxAnnotator(
@@ -402,16 +402,16 @@ class SceneGraph():
             color = color
         )
         labels = [f"{classes[class_id]} {confidence:0.2f}" for confidence, class_id in zip(detections.confidence, detections.class_id)]  # added by someone
-        
+
         if instance_random_color:
             # generate random colors for each segmentation
             # First create a shallow copy of the input detections
             detections = dataclasses.replace(detections)
             detections.class_id = np.arange(len(detections))
-            
+
         image_bgr = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
         annotated_image = mask_annotator.annotate(scene=image_bgr.copy(), detections=detections)
-        
+
         if draw_bbox:
             annotated_image = box_annotator.annotate(scene=annotated_image, detections=detections, labels=labels)
         return annotated_image, labels
@@ -419,7 +419,7 @@ class SceneGraph():
     def process_cfg(self, cfg: DictConfig):
         cfg.dataset_root = Path(cfg.dataset_root)
         cfg.dataset_config = Path(cfg.dataset_config)
-        
+
         if cfg.dataset_config.name != "multiscan.yaml":
             # For datasets whose depth and RGB have the same resolution
             # Set the desired image heights and width from the dataset config
@@ -460,12 +460,12 @@ class SceneGraph():
         if image_crop.shape[:2] != mask_crop.shape:
             print("Cropped shape mismatch: Image crop shape {} != Mask crop shape {}".format(image_crop.shape, mask_crop.shape))
             return None, None
-        
+
         # convert the image back to a pil image
         image_crop = Image.fromarray(image_crop)
 
         return image_crop, mask_crop
-    
+
     def get_pose_matrix(self, observations, map_size_cm):
         x = map_size_cm / 100.0 / 2.0 + observations['gps'][0]
         y = map_size_cm / 100.0 / 2.0 - observations['gps'][1]
@@ -478,7 +478,7 @@ class SceneGraph():
         ])
         return pose_matrix
 
-    # BUG: for some reasone the width of the image changed
+    # BUG: for some reason the width of the image changed
     def segment2d(self, image_rgb):
         print('    segement2d...')
         print('        sam_segmentation...')
@@ -511,7 +511,7 @@ class SceneGraph():
             "image_appear_efficiency": image_appear_efficiency,
             "image_rgb": image_rgb,
         })
-        
+
         # self.clear_line() # temp disable
 
 
@@ -520,14 +520,14 @@ class SceneGraph():
 
         gobs = None # stands for grounded SAM observations
 
-        gobs = self.segment2d_results[-1]
-        
+        gobs = self.segment2d_results[-1] # graph of objects and background?
+
         unt_pose = pose
-        
+
         adjusted_pose = unt_pose
-            
+
         idx = len(self.segment2d_results) - 1
-        fg_detection_list, bg_detection_list = gobs_to_detection_list(
+        fg_detection_list, _ = gobs_to_detection_list( # fg: foreground, bg: background
             cfg = self.cfg,
             image = image_rgb,
             depth_array = depth_array,
@@ -542,24 +542,24 @@ class SceneGraph():
         ) # BUG: The image_rgb changed after this step
 
         # TODO: For some reason I have to use this line, and no idea of the concequence
-        self.segment2d_results[-1]["image_rgb"] = image_rgb 
+        self.segment2d_results[-1]["image_rgb"] = image_rgb
         # print(f"Image size after gob {image_rgb.shape}")
         # print(f"Image size after gob {self.segment2d_results[0]['image_rgb'].shape}")
-            
+
         if len(fg_detection_list) == 0:
             self.clear_line()
             return
-            
+
         if len(self.objects) == 0:
             # Add all detections to the map
             for i in range(len(fg_detection_list)):
                 self.objects.append(fg_detection_list[i])
 
-            # Skip the similarity computation 
+            # Skip the similarity computation
             self.objects_post = filter_objects(self.cfg, self.objects)
             self.clear_line()
             return
-                
+
         print('        compute_spatial_similarities...')
         spatial_sim = compute_spatial_similarities(self.cfg, fg_detection_list, self.objects)
         self.clear_line()
@@ -569,16 +569,16 @@ class SceneGraph():
         print('        aggregate_similarities...')
         agg_sim = aggregate_similarities(self.cfg, spatial_sim, visual_sim)
         self.clear_line()
-        
+
         agg_sim[agg_sim < self.cfg.sim_threshold] = float('-inf')
         spatial_sim[spatial_sim < self.cfg.sim_threshold_spatial] = float('-inf')
-        
+
         self.objects = merge_detections_to_objects(self.cfg, fg_detection_list, self.objects, spatial_sim)
-        
+
         self.objects_post = filter_objects(self.cfg, self.objects)
         self.clear_line()
-            
-            
+
+
     def get_caption(self):
         print('    get_caption...')
         llava_time = 0
@@ -590,7 +590,7 @@ class SceneGraph():
             features = []
             captions = []
             low_confidences = []
-            
+
             image_list = []
             caption_list = []
             confidences_list = []
@@ -633,7 +633,7 @@ class SceneGraph():
 
                     # print(f"LLaVa prompt: {self.prompt_llava}")
                     caption = self.chat(
-                        # image=image_crop_modified, 
+                        # image=image_crop_modified,
                         image_features=image_features,
                         query=self.prompt_llava
                     )  # added by someone
@@ -641,12 +641,12 @@ class SceneGraph():
                     print("\n")
                     caption = caption.replace('\n', '').replace('.', '').lower() # .replace(' ', '')
                     caption = caption.split(' ')[-1]
-                    print(f"Caption given by LLaVa: {caption}\n")                    
+                    print(f"Caption given by LLaVa: {caption}\n")
                     self.clear_line()
                     object['captions'].append(caption)
                     self.segment2d_results[object["image_idx"][idx_det]]['image_appear_efficiency'][object["mask_idx"][idx_det]] = 'done'
-                        
-                
+
+
                     conf_value = conf[idx_det]
                     image_list.append(image_crop)
                     caption_list.append(caption)
@@ -764,7 +764,7 @@ class SceneGraph():
 
     def create_subgraphs(self, obj_goal):
         print('    create_subgraphs...')
-        self.subgraphs.clear() 
+        self.subgraphs.clear()
         for node in self.nodes:
             self.subgraphs.add(SubGraph(node))
         for i, subgraph in enumerate(self.subgraphs):
@@ -803,8 +803,8 @@ class SceneGraph():
         ])
 
         self.segment2d(image_rgb)
-        self.mapping3d(image_rgb, depth_array, cam_K=K, pose=pose_matrix) 
-        self.get_caption() 
+        self.mapping3d(image_rgb, depth_array, cam_K=K, pose=pose_matrix)
+        self.get_caption()
         self.update_node(self.agent.obj_goal)
         self.update_edge(self.agent.obj_goal)
         # self.create_subgraphs(self.agent.obj_goal)
@@ -826,7 +826,7 @@ class SceneGraph():
             score = subgraph.score
             scenegraph_subgraph_list.append({'center': center, 'score': score})
         return scenegraph_subgraph_list
-    
+
     def get_scene_graph_text(self):
         scene_graph_text = {'nodes': [], 'edges': []}
         for node in self.nodes:
@@ -835,7 +835,7 @@ class SceneGraph():
             scene_graph_text['edges'].append(edge.text())
         scene_graph_text = json.dumps(scene_graph_text)
         return scene_graph_text
-    
+
     def get_reason_text(self):
         sorted_nodes = sorted(list(self.nodes))
         reason_num = min(len(sorted_nodes), 4)
@@ -844,7 +844,7 @@ class SceneGraph():
             reason_text.append(sorted_nodes[i].reason)
         reason_text = json.dumps(reason_text)
         return reason_text
-    
+
     def visualize_objects(self):
         points_all = []
         for object in self.objects_post:
@@ -859,7 +859,7 @@ class SceneGraph():
         points_all = np.concatenate(points_all, axis=0)
         np.savetxt('', points_all)
         return
-    
+
     def llm(self, prompt):
         if self.llm_name == 'GPT':
             try:
@@ -873,21 +873,21 @@ class SceneGraph():
                 return chat_completion.choices[0].message.content
             except:
                 return ''
-            
-    def clear_line(self):  
+
+    def clear_line(self):
         sys.stdout.write('\033[F')
         sys.stdout.write('\033[J')
-        sys.stdout.flush()  
+        sys.stdout.flush()
 
-    def find_modes(self, lst):  
+    def find_modes(self, lst):
         if len(lst) == 0:
             return ['object']
         else:
-            counts = Counter(lst)  
-            max_count = max(counts.values())  
-            modes = [item for item, count in counts.items() if count == max_count]  
-            return modes  
-    
+            counts = Counter(lst)
+            max_count = max(counts.values())
+            modes = [item for item, count in counts.items() if count == max_count]
+            return modes
+
     # TODO: Temp method, please check the main function in llava_model.py
     def __get_image_features(self, image):
         image_tensor = self.chat.image_processor.preprocess(
@@ -897,7 +897,7 @@ class SceneGraph():
         return self.chat.encode_image(
             image_tensor[None, ...].half().cuda()
         )
-        
+
     def discriminate_relation(self, edge):
         image_idx1 = edge.node1.object["image_idx"]
         image_idx2 = edge.node2.object["image_idx"]
@@ -921,25 +921,25 @@ class SceneGraph():
             print("Device i: ", image_features.device, "\n")
 
             prompt = self.prompt_discriminate_relation.format(
-                edge.node1.caption, 
-                edge.node2.caption, 
+                edge.node1.caption,
+                edge.node2.caption,
                 edge.relation
             )
             # print(f"LLaVa relation prompt: {prompt}")
             response = self.chat(
-                # image=image, 
+                # image=image,
                 image_features=image_features,
                 query=prompt
             )  # added by someone
             print(f"LLaVa response in discriminate relation: {response}\n")
-            
+
             if 'yes' in response.lower():
                 return True
             else:
                 return False
         # discriminate long edge
         else:
-            # discriminate same room 
+            # discriminate same room
             if edge.node1.room_node != edge.node2.room_node:
                 return False
             x1, y1 = edge.node1.center
@@ -947,7 +947,7 @@ class SceneGraph():
             distance = math.sqrt((x2 - x1)**2 + (y2 - y1)**2)
             if distance > self.agent.map_size // 20:
                 return False
-            alpha = math.atan2(y2 - y1, x2 - x1)  
+            alpha = math.atan2(y2 - y1, x2 - x1)
             sin_2alpha = 2 * math.sin(alpha) * math.cos(alpha)
             if not -0.05 < sin_2alpha < 0.05:
                 return False
@@ -959,7 +959,7 @@ class SceneGraph():
                 if not self.free_map[y, x]:
                     return False
             return True
-        
+
     def verify_goal(self, goal_xy):
         goal_x, goal_y = goal_xy
         distances = []
@@ -974,7 +974,7 @@ class SceneGraph():
         score = sum(scores) / len(scores)
         score_threshold = 0.2
         return score > score_threshold
-    
+
     def reset(self):
         self.segment2d_results = []
         self.reason = ''
