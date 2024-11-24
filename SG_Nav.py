@@ -78,8 +78,8 @@ class Agent:
 
 class CLIP_LLM_FMMAgent_NonPano(Agent):
     """
-    New in this version: 
-    1. use obj and room reasoning by record object locations and build a room map 
+    New in this version:
+    1. use obj and room reasoning by record object locations and build a room map
     experiments: v4_4
     """
     def __init__(self, task_config, args=None):
@@ -123,11 +123,11 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         self.split = (self.args.split_l >= 0)
 
         ### ------ init glip model ------ ###
-        config_file = "GLIP/configs/pretrain/glip_Swin_L.yaml" 
+        config_file = "GLIP/configs/pretrain/glip_Swin_L.yaml"
         weight_file = "GLIP/MODEL/glip_large_model.pth"
         glip_cfg.local_rank = 0
         glip_cfg.num_gpus = 1
-        glip_cfg.merge_from_file(config_file) 
+        glip_cfg.merge_from_file(config_file)
         glip_cfg.merge_from_list(["MODEL.WEIGHT", weight_file])
         glip_cfg.merge_from_list(["MODEL.DEVICE", "cuda"])
         self.glip_demo = GLIPDemo(
@@ -146,13 +146,13 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         self.collision_threshold = 0.08
         self.col_width = 5
         self.selem = skimage.morphology.square(1)
-        
+
         ### ----- init maps ----- ###
         self.init_map()
-        self.sem_map_module = Semantic_Mapping(self).to(self.device) 
+        self.sem_map_module = Semantic_Mapping(self).to(self.device)
         self.free_map_module = Semantic_Mapping(self, max_height=10,min_height=-150).to(self.device)
         self.room_map_module = Semantic_Mapping(self, max_height=200,min_height=-10, num_cats=9).to(self.device)
-        
+
         self.free_map_module.eval()
         self.free_map_module.set_view_angles(self.camera_horizon)
         self.sem_map_module.eval()
@@ -161,21 +161,21 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         self.room_map_module.set_view_angles(self.camera_horizon)
 
         self.camera_matrix = self.free_map_module.camera_matrix  # added by someone
-        
+
         print('FMM navigate map init finish!!!')
-        
+
         ### ----- load commonsense from LLMs ----- ###
         self.goal_idx = {}
         for key in projection:
-            self.goal_idx[projection[key]] = categories_21.index(projection[key]) # each goal corresponding to which column in co-orrcurance matrix 
+            self.goal_idx[projection[key]] = categories_21.index(projection[key]) # each goal corresponding to which column in co-orrcurance matrix
         self.co_occur_mtx = np.load('ablations/npys/deberta_predict.npy')
         self.co_occur_mtx -= self.co_occur_mtx.min()
-        self.co_occur_mtx /= self.co_occur_mtx.max() 
-        
+        self.co_occur_mtx /= self.co_occur_mtx.max()
+
         self.co_occur_room_mtx = np.load('ablations/npys/deberta_predict_room.npy')
         self.co_occur_room_mtx -= self.co_occur_room_mtx.min()
         self.co_occur_room_mtx /= self.co_occur_room_mtx.max()
-        
+
         ### ----- option: using PSL optimization ADMM ----- ###
         if self.args.PSL_infer:
             self.psl_model = PSLModel('objnav1')  ## important: please use different name here for different process in the same machine. eg. objnav, objnav2, ...
@@ -206,23 +206,23 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
 
             predicate = Predicate('IsNearObj', size = 2)
             model.add_predicate(predicate)
-            
+
             predicate = Predicate('ObjCooccur', size = 1)
             model.add_predicate(predicate)
         if self.args.reasoning in ['both', 'room']:
 
             predicate = Predicate('IsNearRoom', size = 2)
             model.add_predicate(predicate)
-            
+
             predicate = Predicate('RoomCooccur', size = 1)
             model.add_predicate(predicate)
-        
+
         predicate = Predicate('Choose', size = 1)
         model.add_predicate(predicate)
-        
+
         predicate = Predicate('ShortDist', size = 1)
         model.add_predicate(predicate)
-        
+
     def add_rules(self, model):
         """
         add rules for ADMM PSL inference
@@ -235,7 +235,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
             model.add_rule(Rule('2: !RoomCooccur(R) & IsNearRoom(R,F) -> !Choose(F)^2'))
         model.add_rule(Rule('2: ShortDist(F) -> Choose(F)^2'))
         model.add_rule(Rule('Choose(+F) = 1 .'))
-    
+
     def reset(self):
         """
         reset variables for each episodes
@@ -277,35 +277,35 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         self.found_goal_times_threshold = 100 # self.threshold_list[self.benchmark._env.current_episode.object_category]
         ###########
         self.current_obj_predictions = []
-        self.obj_locations = [[] for i in range(21)] # length equal to all the objects in reference matrix 
+        self.obj_locations = [[] for i in range(21)] # length equal to all the objects in reference matrix
         self.not_move_steps = 0
         self.move_since_random = 0
         self.using_random_goal = False
-        
+
         self.fronter_this_ex = 0
         self.random_this_ex = 0
         ########### error analysis
-        self.detect_true = False
+        # self.detect_true = False
         self.goal_appear = False
         self.frontiers_gps = []
-        
+
         self.last_location = np.array([0.,0.])
         self.current_stuck_steps = 0
         self.total_stuck_steps = 0
         self.scenegraph.reset()
-        
+
         # os.system(f'rm -r {self.save_image_dir}')
-        
+
     def detect_objects(self, observations):
         """
         detect objects from current observations and update semantic map.
         """
-        self.current_obj_predictions = self.glip_demo.inference(observations["rgb"][:,:,[2,1,0]], object_captions) # GLIP object detection, time cosuming
+        self.current_obj_predictions = self.glip_demo.inference(observations["rgb"][:,:,[2,1,0]], object_captions) # GLIP object detection, time cosuming, rgb -> bgr
         new_labels = self.get_glip_real_label(self.current_obj_predictions) # transfer int labels to string labels
         self.current_obj_predictions.add_field("labels", new_labels)
 
         observations["rgb_annotated"] = self.draw_bboxes_with_labels(rgb=observations["rgb_annotated"], bboxes=self.current_obj_predictions.bbox.numpy(), labels=self.current_obj_predictions.get_field("labels"), color='pink')
-        
+
         shortest_distance = 120 # TODO: shortest distance  or most confident?
         shortest_distance_angle = 0
         goal_prediction = copy.deepcopy(self.current_obj_predictions)
@@ -318,7 +318,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
                 observations["rgb_annotated"] = self.draw_bboxes_with_labels(rgb=observations["rgb_annotated"], bboxes=np.expand_dims(self.current_obj_predictions.bbox[j].numpy(), axis=0), labels=[self.obj_goal], color='red')
             elif self.obj_goal == 'gym_equipment' and (label in ['treadmill', 'exercise machine']):
                 goal_bbox.append(self.current_obj_predictions.bbox[j])
-        
+
         ### record the location of object center in the semantic map for object reasoning.
         if self.args.reasoning == 'both' or 'obj':
             for j, label in enumerate(obj_labels):
@@ -334,8 +334,8 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
                     x = int(self.map_size_cm/10-obj_gps[1]*100/self.resolution)
                     y = int(self.map_size_cm/10+obj_gps[0]*100/self.resolution)
                     self.obj_locations[categories_21_origin.index(label)].append([confidence, x, y])
-        
-        ### if detect a goal object, determine if it's beyond 5 meters or not. 
+
+        ### if detect a goal object, determine if it's beyond 5 meters or not.
         if len(goal_bbox) > 0:
             long_goal_detected_before = copy.deepcopy(self.found_long_goal)
             goal_prediction.bbox = torch.stack(goal_bbox)
@@ -352,7 +352,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
                     k += 0.5
                     temp_distance = max(self.depth[center_point[1]+int(pos_neg*k),center_point[0],0],
                     self.depth[center_point[1],center_point[0]+int(pos_neg*k),0])
-                    
+
                 if temp_distance >= 4.999:
                     self.found_long_goal = True
                     self.ever_long_goal = True
@@ -368,7 +368,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
                     if verification_passed:
                         self.found_goal = True
                     self.found_long_goal = False
-                
+
                 ## select the closest goal
                 direction = temp_direction
                 distance = temp_distance
@@ -376,28 +376,28 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
                     shortest_distance = distance
                     shortest_distance_angle = direction
                     box_shortest = copy.deepcopy(box)
-            
+
             if self.found_goal:
                 self.goal_gps = self.get_goal_gps(observations, shortest_distance_angle, shortest_distance)
             elif not long_goal_detected_before:
                 # if detected a long goal before, then don't change it until see a goal within 5 meters
                 self.long_goal_temp_gps = self.get_goal_gps(observations, shortest_distance_angle, shortest_distance)
-            if self.args.error_analysis and self.found_goal:
-                if (observations['semantic'][box_shortest[0]:box_shortest[2],box_shortest[1]:box_shortest[3]] == self.goal_mp3d_idx).sum() > min(300, 0.2 * (box_shortest[2]-box_shortest[0])*(box_shortest[3]-box_shortest[1])):
-                     self.detect_true = True
+            # if self.args.error_analysis and self.found_goal:
+            #     if (observations['semantic'][box_shortest[0]:box_shortest[2],box_shortest[1]:box_shortest[3]] == self.goal_mp3d_idx).sum() > min(300, 0.2 * (box_shortest[2]-box_shortest[0])*(box_shortest[3]-box_shortest[1])):
+            #          self.detect_true = True
         else:  # added by someone
             if self.found_goal:
                 self.found_goal = False
                 self.found_goal_times = 0
                 # self.double_found_goal = False
                 # self.triple_found_goal = False
-            
-                   
+
+
     def act(self, observations):
-        """ 
-        observations: 
-        """ 
-        # if self.total_steps >= 482:  # due to using turning 60 degree action at the beginning. 
+        """
+        observations:
+        """
+        # if self.total_steps >= 482:  # due to using turning 60 degree action at the beginning.
         # print(observations.keys())
         # print("Prompts GPT", self.scenegraph.prompt_gpt)
         # print("Prompts LLaVa", self.scenegraph.prompt_llava)
@@ -407,14 +407,14 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
 
         if self.total_steps >= 500:  # 230 is setted by someone
             return {"action": 0}
-        
+
         self.total_steps += 1
         print(f"act {self.total_steps}")
         if self.navigate_steps == 0:
             self.obj_goal = projection[int(observations["objectgoal"])]
             self.prob_array_room = self.co_occur_room_mtx[self.goal_idx[self.obj_goal]]
             self.prob_array_obj = self.co_occur_mtx[self.goal_idx[self.obj_goal]]
-            ## ADMM PSL optim only 
+            ## ADMM PSL optim only
             if self.args.PSL_infer == 'optim':
                 if self.args.reasoning in ['both','room']:
                     for predicate in self.psl_model.get_predicates().values():
@@ -423,7 +423,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
                     prob_array_room_list = list(self.prob_array_room)
                     data = pandas.DataFrame([[i, prob_array_room_list[i]] for i in range(len(prob_array_room_list))], columns = list(range(2)))
                     self.psl_model.get_predicate('RoomCooccur').add_data(Partition.OBSERVATIONS, data)
-                
+
                 if self.args.reasoning in ['both','obj']:
                     for predicate in self.psl_model.get_predicates().values():
                         if predicate.name() in ['OBJCOOCCUR']:
@@ -434,13 +434,12 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
 
         observations["depth"][observations["depth"]==0.5] = 100 # don't construct unprecise map with distance less than 0.5 m
         self.depth = observations["depth"]
-        self.rgb = observations["rgb"][:,:,[2,1,0]]
         observations["rgb_annotated"] = observations["rgb"]
 
         self.scenegraph.update_observation(observations) # VLM and LLM update scenegraph here
-        self.update_map(observations) # some kind of map update
-        self.update_free_map(observations) # some kind of map update
-        
+        self.update_map(observations) # some kind of map update, use depth
+        self.update_free_map(observations) # some kind of map update, use depth
+
         if self.args.visulize and False:  # Falsed by someone
             input_pose = np.zeros(7)
             traversible, cur_start, cur_start_o = self.get_traversible(self.full_map.cpu().numpy()[0,0,::-1], input_pose)
@@ -449,7 +448,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
             save_image((gray_map / gray_map.max()), 'figures/map/img'+str(self.total_steps)+'.png')
             save_image(torch.from_numpy(observations["rgb"]/255).float().permute(2,0,1), 'figures/rgb/img'+str(self.total_steps)+'.png')
             save_image(torch.from_numpy(observations["depth"]/5).float().permute(2,0,1).float(), 'figures/dist/d'+str(self.navigate_steps)+'.png')
-        
+
         # NOTE: Hardcoding to ajust the view angles of the semantic mapping modules
         # NOTE: Initial 22 total steps seems fixed
         # look down twice and look around at first to initialize map
@@ -483,12 +482,11 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         if self.total_steps <= 22 and not self.found_goal:
             self.panoramic.append(observations["rgb"][:,:,[2,1,0]])
             self.panoramic_depth.append(observations["depth"])
-            self.detect_objects(observations)
-            room_detection_result = self.glip_demo.inference(observations["rgb"][:,:,[2,1,0]], rooms_captions)
-            self.update_room_map(observations, room_detection_result)
+            self.detect_objects(observations) # use semantic, glip, depth
+            self.update_room_map(observations) # glip res, glip, glip res
             if not self.found_goal: # if found a goal, directly go to it
                 return {"action": 4} # {"action": 6}
-                    
+
         if not (observations["gps"] == self.last_gps).all():
             self.move_steps += 1
             self.not_move_steps = 0
@@ -496,17 +494,16 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
                 self.move_since_random += 1
         else:
             self.not_move_steps += 1
-            
+
         self.last_gps = observations["gps"]
-        
+
         # if not self.found_goal:
         if (self.goal_verification and self.found_goal_times < self.found_goal_times_threshold) or (not self.goal_verification and not self.found_goal):
             ## perform object and room detection if have't found a goal
-            self.detect_objects(observations)
+            self.detect_objects(observations) # use semantic, glip, depth
             if self.total_steps % 2 == 0 and self.args.reasoning in ['both','room']:
-                room_detection_result = self.glip_demo.inference(observations["rgb"][:,:,[2,1,0]], rooms_captions)
-                self.update_room_map(observations, room_detection_result)
-          
+                self.update_room_map(observations) # use depth, glip, glip res
+
         ### ------ generate action using FMM ------ ###
         ## update pose and map
         self.history_pose.append(self.full_pose.cpu().detach().clone())
@@ -517,13 +514,13 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         input_pose[4] = self.full_map.shape[-2]
         input_pose[6] = self.full_map.shape[-1]
         traversible, cur_start, cur_start_o = self.get_traversible(self.full_map.cpu().numpy()[0,0,::-1], input_pose)
-        
-        if self.found_goal: 
+
+        if self.found_goal:
             ## directly go to goal
             self.not_use_random_goal()
             self.goal_map = np.zeros(self.full_map.shape[-2:])
             self.goal_map[max(0,min(self.map_size - 1,int(self.map_size_cm/10+self.goal_gps[1]*100/self.resolution))), max(0,min(self.map_size - 1,int(self.map_size_cm/10+self.goal_gps[0]*100/self.resolution)))] = 1
-        elif self.found_long_goal: 
+        elif self.found_long_goal:
             ## go to long goal
             self.not_use_random_goal()
             self.goal_map = np.zeros(self.full_map.shape[-2:])
@@ -541,12 +538,12 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
                 self.fronter_this_ex += 1
                 self.goal_map[self.goal_loc[0], self.goal_loc[1]] = 1
                 self.goal_map = self.goal_map[::-1]
-        
+
         stg_y, stg_x, number_action = self._plan(traversible, self.goal_map, self.full_pose, cur_start, cur_start_o, self.found_goal)
-        if self.found_long_goal and number_action == 0: # didn't detect goal when arrive at long goal, start over FBE. 
+        if self.found_long_goal and number_action == 0: # didn't detect goal when arrive at long goal, start over FBE.
             self.found_long_goal = False
-        
-        if (not self.found_goal and not self.found_long_goal and number_action == 0) or (self.using_random_goal and self.move_since_random > 20): 
+
+        if (not self.found_goal and not self.found_long_goal and number_action == 0) or (self.using_random_goal and self.move_since_random > 20):
             # FBE if arrive at a selected frontier, or randomly explore for some steps
             self.goal_loc = self.fbe(traversible, cur_start)
             self.not_use_random_goal()
@@ -560,7 +557,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
                 self.goal_map[self.goal_loc[0], self.goal_loc[1]] = 1
                 self.goal_map = self.goal_map[::-1]
             stg_y, stg_x, number_action = self._plan(traversible, self.goal_map, self.full_pose, cur_start, cur_start_o, self.found_goal)
-        
+
         self.loop_time = 0
         while (not self.found_goal and number_action == 0) or self.not_move_steps >= 7:
             # the agent is stuck, then random explore
@@ -573,7 +570,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
             self.goal_map = self.set_random_goal()
             self.using_random_goal = True
             stg_y, stg_x, number_action = self._plan(traversible, self.goal_map, self.full_pose, cur_start, cur_start_o, self.found_goal)
-        
+
         # ------------------------------ visualization -------------------------
         if self.args.visulize:
             save_map = copy.deepcopy(torch.from_numpy(traversible))
@@ -592,7 +589,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
             # gray_map[:, int(stg_y)-1:int(stg_y)+1, int(stg_x)-1:int(stg_x)+1] = 0
             # gray_map[2, int(stg_y)-1:int(stg_y)+1, int(stg_x)-1:int(stg_x)+1] = 1
             free_map = self.fbe_free_map.cpu().numpy()[0,0,::-1].copy() > 0.5
-            
+
             paper_map = torch.zeros_like(paper_obstacle_map)
             paper_map_trans = paper_map.permute(1,2,0)
             # unknown_rgb = colors.to_rgb('lightcyan')
@@ -638,7 +635,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
                 pose_dict = {}
             pose_dict[str(self.navigate_steps)] = {'compass': str(observations['compass']), 'gps': str(observations['gps'])}
             json.dump(pose_dict, open('figures/pose/pose.json', 'w'))
-            
+
         observations["pointgoal_with_gps_compass"] = self.get_relative_goal_gps(observations)
 
         ###-----------------------------------###
@@ -647,13 +644,13 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         self.prev_action = number_action
         self.navigate_steps += 1 # NOTE: The steps after the first 22 steps?
         torch.cuda.empty_cache()
-        
+
         return {"action": number_action}
-    
+
     def not_use_random_goal(self):
         self.move_since_random = 0
         self.using_random_goal = False
-        
+
     def get_glip_real_label(self, prediction):
         labels = prediction.get_field("labels").tolist()
         new_labels = []
@@ -666,15 +663,15 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         else:
             new_labels = ['object' for i in labels]
         return new_labels
-    
+
     def fbe(self, traversible, start):
         """
-        fontier: unknown area and free area 
-        unknown area: not free and not obstacle 
+        fontier: unknown area and free area
+        unknown area: not free and not obstacle
         select a frontier using commonsense and PSL and return a GPS
         """
         fbe_map = torch.zeros_like(self.full_map[0,0])
-        fbe_map[self.fbe_free_map[0,0]>0] = 1  # first free 
+        fbe_map[self.fbe_free_map[0,0]>0] = 1  # first free
         fbe_map[skimage.morphology.binary_dilation(self.full_map[0,0].cpu().numpy(), skimage.morphology.disk(4))] = 3 # then dialte obstacle
 
         fbe_cp = copy.deepcopy(fbe_map)
@@ -683,14 +680,14 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         fbe_cp[fbe_cp < 4] = 0  # free and obstacle
         selem = skimage.morphology.disk(1)
         fbe_cpp[skimage.morphology.binary_dilation(fbe_cp.cpu().numpy(), selem)] = 0 # don't know space is 0 dialate unknown space
-        
-        diff = fbe_map - fbe_cpp # intersection between unknown area and free area 
+
+        diff = fbe_map - fbe_cpp # intersection between unknown area and free area
         frontier_map = diff == 1
         frontier_locations = torch.stack([torch.where(frontier_map)[0], torch.where(frontier_map)[1]]).T
         num_frontiers = len(torch.where(frontier_map)[0])
         if num_frontiers == 0:
             return None
-        
+
         # for each frontier, calculate the inverse of distance
         planner = FMMPlanner(traversible, None)
         state = [start[0] + 1, start[1] + 1]
@@ -699,7 +696,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         frontier_locations += 1
         frontier_locations = frontier_locations.cpu().numpy()
         distances = fmm_dist[frontier_locations[:,0],frontier_locations[:,1]] / 20
-        
+
         ## use the threshold of 1.6 to filter close frontiers to encourage exploration
         idx_16 = np.where(distances>=1.6)
         distances_16 = distances[idx_16]
@@ -711,7 +708,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
             return None
         num_16_frontiers = len(idx_16[0])  # 175
         scores = np.zeros((num_16_frontiers))
-                
+
         if self.args.reasoning in ['both', 'room']:
             for i, loc in enumerate(frontier_locations_16):
                 sub_room_map = self.room_map[0,:,max(0,loc[0]-12):min(self.map_size-1,loc[0]+13), max(0,loc[1]-12):min(self.map_size-1,loc[1]+13)].cpu().numpy() # sub_room_map.shape = [9, 25, 25], select the room map around the frontier
@@ -719,7 +716,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
                 score_1 = np.clip(1-(1-self.prob_array_room)-(1-whether_near_room), 0, 10)  # score_1.shape = [9], prob_array_room.shape = [9]
                 score_2 = 1- np.clip(self.prob_array_room+(1-whether_near_room), -10,1)  # score_2.shape = [9]
                 scores[i] = np.sum(score_1) - np.sum(score_2)
-        
+
         if self.args.reasoning in ['both', 'obj']:
             for i in range(21):
                 num_obj = len(self.obj_locations[i])
@@ -731,13 +728,13 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
                 obj_location_mtx = np.tile(obj_location_mtx, (num_16_frontiers,1,1)).transpose(1,0,2) # k*m*2  (4, 175, 2)
                 dist_frontier_obj = np.square(frontier_location_mtx - obj_location_mtx)
                 dist_frontier_obj = np.sqrt(np.sum(dist_frontier_obj, axis=2)) / 20 # k*m  (4, 175)
-                near_frontier_obj = dist_frontier_obj < 1.6 # k*m 
-                obj_confidence_mtx[near_frontier_obj==False] = 0 # k*m 
+                near_frontier_obj = dist_frontier_obj < 1.6 # k*m
+                obj_confidence_mtx[near_frontier_obj==False] = 0 # k*m
                 obj_confidence_max = np.max(obj_confidence_mtx, axis=0)  # (175)
                 score_1 = np.clip(1-(1-self.prob_array_obj[i])-(1-obj_confidence_max), 0, 10)
                 score_2 = 1- np.clip(self.prob_array_obj[i]+(1-obj_confidence_max), -10,1)
                 scores += score_1 - score_2
-                
+
 
         for node in self.scenegraph.nodes:
             xy = np.array(node.object['xy']).reshape(1, 2)
@@ -758,7 +755,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         #     file_object.write(str(distances[idx_16_max]) + '\n')
         self.scores = scores
         return goal
-        
+
     def get_goal_gps(self, observations, angle, distance):
         ### return goal gps in the original agent coordinates
         if type(angle) is torch.Tensor:
@@ -779,7 +776,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         agent_compass = observations['compass']
         phi = phi_world - agent_compass
         return np.array([rho, phi.item()], dtype=np.float32)
-   
+
     def init_map(self):
         self.map_size = self.map_size_cm // self.map_resolution
         full_w, full_h = self.map_size, self.map_size
@@ -791,7 +788,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         self.full_pose = torch.zeros(3).float().to(self.device)
         # Origin of local map
         self.origins = np.zeros((2))
-        
+
         def init_map_and_pose():
             self.full_map.fill_(0.)
             self.full_pose.fill_(0.)
@@ -808,7 +805,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         self.full_pose[1] = self.map_size_cm / 100.0 / 2.0-torch.from_numpy(observations['gps']).to(self.device)[1]
         self.full_pose[2:] = torch.from_numpy(observations['compass'] * 57.29577951308232).to(self.device) # input degrees and meters
         self.full_map = self.sem_map_module(torch.squeeze(torch.from_numpy(observations['depth']), dim=-1).to(self.device), self.full_pose, self.full_map)
-    
+
     def update_free_map(self, observations):
         """
         update free map using visual projection
@@ -818,8 +815,9 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         self.full_pose[2:] = torch.from_numpy(observations['compass'] * 57.29577951308232).to(self.device) # input degrees and meters
         self.fbe_free_map = self.free_map_module(torch.squeeze(torch.from_numpy(observations['depth']), dim=-1).to(self.device), self.full_pose, self.fbe_free_map)
         self.fbe_free_map[int(self.map_size_cm / 10) - 3:int(self.map_size_cm / 10) + 4, int(self.map_size_cm / 10) - 3:int(self.map_size_cm / 10) + 4] = 1
-    
-    def update_room_map(self, observations, room_prediction_result):
+
+    def update_room_map(self, observations):
+        room_prediction_result = self.glip_demo.inference(observations["rgb"][:,:,[2,1,0]], rooms_captions)
         new_room_labels = self.get_glip_real_label(room_prediction_result)
         observations["rgb_annotated"] = self.draw_bboxes_with_labels(rgb=observations["rgb_annotated"], bboxes=room_prediction_result.bbox.numpy(), labels=new_room_labels, color='yellow')
         type_mask = np.zeros((9,self.config.SIMULATOR.DEPTH_SENSOR.HEIGHT, self.config.SIMULATOR.DEPTH_SENSOR.WIDTH))
@@ -834,7 +832,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         # self.room_map_refine = copy.deepcopy(self.room_map)
         # other_room_map_sum = self.room_map_refine[0,0] + torch.sum(self.room_map_refine[0,2:],axis=0)
         # self.room_map_refine[0,1][other_room_map_sum>0] = 0
-    
+
     def get_traversible(self, map_pred, pose_pred):
         """
         update traversible map
@@ -860,11 +858,11 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
             new_mat = np.zeros((h+2,w+2)) + value
             new_mat[1:h+1,1:w+1] = mat
             return new_mat
-        
+
         def delete_boundary(mat):
             new_mat = copy.deepcopy(mat)
             return new_mat[1:-1,1:-1]
-        
+
         [gx1, gx2, gy1, gy2] = planning_window
 
         x1, y1, = 0, 0
@@ -882,16 +880,16 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         selem = skimage.morphology.disk(4)
         traversible = skimage.morphology.binary_dilation(
                         traversible, selem) != True
-        
+
         traversible[int(start[0]-y1)-1:int(start[0]-y1)+2,
             int(start[1]-x1)-1:int(start[1]-x1)+2] = 1
         traversible = traversible * 1.
-        
+
         traversible[self.visited[gy1:gy2, gx1:gx2][y1:y2, x1:x2] == 1] = 1
         traversible[self.collision_map[gy1:gy2, gx1:gx2][y1:y2, x1:x2] == 1] = 0
         traversible = add_boundary(traversible)
         return traversible, start, start_o
-    
+
     def _plan(self, traversible, goal_map, agent_pose, start, start_o, goal_found):
         """Function responsible for planning
 
@@ -985,33 +983,33 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
                 action = 1
 
         return stg_y, stg_x, action
-    
+
     def _get_stg(self, traversible, start, goal, goal_found):
         def add_boundary(mat, value=1):
             h, w = mat.shape
             new_mat = np.zeros((h+2,w+2)) + value
             new_mat[1:h+1,1:w+1] = mat
             return new_mat
-        
+
         def delete_boundary(mat):
             new_mat = copy.deepcopy(mat)
             return new_mat[1:-1,1:-1]
-        
+
         goal = add_boundary(goal, value=0)
         original_goal = copy.deepcopy(goal)
-        
-            
+
+
         centers = []
         if len(np.where(goal !=0)[0]) > 1:
             goal, centers = CH._get_center_goal(goal)
         state = [start[0] + 1, start[1] + 1]
         self.planner = FMMPlanner(traversible, None)
-            
-        if self.dilation_deg!=0: 
+
+        if self.dilation_deg!=0:
             #if self.args.debug_local:
             #    self.print_log("dilation added")
             goal = CH._add_cross_dilation(goal, self.dilation_deg, 3)
-            
+
         if goal_found:
             # if self.args.debug_local:
             #     self.print_log("goal found!")
@@ -1020,7 +1018,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
             except:
                 goal = self.set_random_goal(goal)
 
-        self.planner.set_multi_goal(goal, state) # time cosuming 
+        self.planner.set_multi_goal(goal, state) # time cosuming
 
         decrease_stop_cond =0
         if self.dilation_deg >= 6:
@@ -1029,11 +1027,11 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         stg_x, stg_y = stg_x - 1, stg_y - 1
         if stop:
             a = 1
-        
+
         # self.closest_goal = CH._get_closest_goal(start, goal)
-        
+
         return (stg_y, stg_x), stop
-    
+
     def set_random_goal(self):
         """
         return a random goal in the map
@@ -1051,7 +1049,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
             w_goal = np.random.choice(goal.shape[1], 1)[0]
         goal[h_goal, w_goal] = 1
         return goal
-    
+
     def visualize_agent_and_goal(self, map):
         # map = map.permute(1, 2, 0)
         def draw_agent(pose, agent_size, color_index, alpha=1):
@@ -1087,7 +1085,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         # map = map.permute(2, 0, 1)
         return map
 
-    
+
     def visualize_obj_goal(self, map):
         agent_state = self.benchmark._env.sim.get_agent_state()
 
@@ -1134,32 +1132,32 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         image = image / 255
         image = image.permute(2, 0, 1)
         return image
-    
-    def draw_bboxes_with_labels(self, rgb, bboxes, labels, color='red'):  
-        # img = Image.open(image_path)  
+
+    def draw_bboxes_with_labels(self, rgb, bboxes, labels, color='red'):
+        # img = Image.open(image_path)
         # rgb = np.transpose(rgb, (1, 2, 0))
         img = Image.fromarray(rgb)
-        draw = ImageDraw.Draw(img)  
-        
-        for bbox, label in zip(bboxes, labels):  
-            x1, y1, x2, y2 = bbox  
-            
-            draw.rectangle([x1, y1, x2, y2], outline=color, width=2)  
-            
-            # text_width, text_height = draw.textsize(label)  
-            font = ImageFont.load_default()  
-            
-            bbox = draw.textbbox((0, 0), label, font=font)  
-            left, upper, right, lower = bbox  
-            
-            text_width = right - left  
-            text_height = lower - upper  
-            # margin = 10  
-            # draw.rectangle([x1, y1 - text_height - margin, x1 + text_width, y1 - margin], fill=color)  
-            # draw.text((x1, y1 - text_height - margin), label, fill='white')  
-            draw.rectangle([x1, y1, x1 + text_width, y1 + text_height], fill=color)  
-            draw.text((x1, y1), label, fill='white')  
-        
+        draw = ImageDraw.Draw(img)
+
+        for bbox, label in zip(bboxes, labels):
+            x1, y1, x2, y2 = bbox
+
+            draw.rectangle([x1, y1, x2, y2], outline=color, width=2)
+
+            # text_width, text_height = draw.textsize(label)
+            font = ImageFont.load_default()
+
+            bbox = draw.textbbox((0, 0), label, font=font)
+            left, upper, right, lower = bbox
+
+            text_width = right - left
+            text_height = lower - upper
+            # margin = 10
+            # draw.rectangle([x1, y1 - text_height - margin, x1 + text_width, y1 - margin], fill=color)
+            # draw.text((x1, y1 - text_height - margin), label, fill='white')
+            draw.rectangle([x1, y1, x1 + text_width, y1 + text_height], fill=color)
+            draw.text((x1, y1), label, fill='white')
+
         rgb = np.array(img)
         return rgb
 
@@ -1176,11 +1174,11 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         frontier_rgb = torch.tensor(frontier_rgb).double()
         thickness = 2
         selem = skimage.morphology.disk(thickness)
-        def hsv_to_rgb(h, s, v):  
-            h = h / 360.0  
-            r, g, b = colorsys.hsv_to_rgb(h, s, v)  
-            # r, g, b = int(r * 255), int(g * 255), int(b * 255)  
-            return r, g, b  
+        def hsv_to_rgb(h, s, v):
+            h = h / 360.0
+            r, g, b = colorsys.hsv_to_rgb(h, s, v)
+            # r, g, b = int(r * 255), int(g * 255), int(b * 255)
+            return r, g, b
         for i, frontier in enumerate(frontier_locations_16):
             # frontier[0] = frontier[0] + 10
             frontier[0] = self.map_size - 1 - frontier[0]
@@ -1188,7 +1186,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
             # v = 0.5 - 0.5 * i / len(frontier_locations_16)
             # combine_rgb = v * wight_rgb + (1 - v) * frontier_rgb
             h = 240 * (1 - i / len(frontier_locations_16))
-            r, g, b = hsv_to_rgb(h, 1, 1)  
+            r, g, b = hsv_to_rgb(h, 1, 1)
             combine_rgb = torch.tensor([r, g, b]).double()
             # color_map[color_map[0] - 4:color_map[0] + 4, color_map[1] - 4:color_map[1] + 4, :] = torch.tensor(combine_rgb).double()
             # index_map[color_map[0] - 4:color_map[0] + 4, color_map[1] - 4:color_map[1] + 4, :] = 1
@@ -1199,7 +1197,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         # frontier_map[skimage.morphology.binary_dilation(frontier_map, selem)] = 1
         # paper_map_trans[(frontier_map==1)*(paper_map_trans[:,:,0]==torch.tensor(unknown_rgb)[0]).numpy(),:] = color_map[(frontier_map==1)*(paper_map_trans[:,:,0]==torch.tensor(unknown_rgb)[0]).numpy(),:]
         return paper_map_trans
-    
+
     def set_benchmark(self, benchmark):
         self.benchmark = benchmark
 
