@@ -1,20 +1,16 @@
 import os
 import argparse
-from types import SimpleNamespace
 
 import yaml
 import numpy as np
 
-from utils_glip import *
-from SG_Nav import CLIP_LLM_FMMAgent_NonPano
-
-
-def dict_to_namespace(d):
-    # Recursively convert dicts to SimpleNamespace
-    return SimpleNamespace(**{k: dict_to_namespace(v) if isinstance(v, dict) else v for k, v in d.items()})
+from decision.utils_glip import *
+from decision.sg_nav import CLIP_LLM_FMMAgent_NonPano
+from decision.agent import dict_to_namespace
 
 
 if __name__ == "__main__":
+    # os.environ["CUDA_VISIBLE_DEVICES"] = "0"
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--evaluation", default="local", type=str, choices=["local", "remote"]
@@ -48,8 +44,7 @@ if __name__ == "__main__":
     config = dict_to_namespace(config_dict)
     agent = CLIP_LLM_FMMAgent_NonPano(config, args)
 
-
-    test_data: dict = np.load("test_data.npz", allow_pickle=True)
+    test_data: dict = np.load("demos/test_data.npz", allow_pickle=True)
     keys = test_data.files
     print(keys)
     for i in range(100):

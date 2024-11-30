@@ -18,7 +18,7 @@ from typing import List
 import quaternion
 from GLIP.maskrcnn_benchmark.engine.predictor_glip import GLIPDemo
 from GLIP.maskrcnn_benchmark.config import cfg as glip_cfg
-from utils_glip import *
+from decision.utils_glip import *
 
 # import habitat
 # from habitat.core.agent import Agent
@@ -37,7 +37,7 @@ from pslpython.partition import Partition
 from pslpython.predicate import Predicate
 from pslpython.rule import Rule
 
-from scenegraph import SceneGraph
+from .scenegraph import SceneGraph
 
 
 ADDITIONAL_PSL_OPTIONS = {
@@ -1204,54 +1204,54 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         self.benchmark = benchmark
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--evaluation", default="local", type=str, choices=["local", "remote"]
-    )
-    parser.add_argument(
-        "--PSL_infer", default="one_hot", type=str, choices=["optim", "one_hot"]
-    )
-    parser.add_argument(
-        "--reasoning", default="both", type=str, choices=["both", "room", "obj"]
-    )
-    parser.add_argument(
-        "--llm", default="deberta", type=str, choices=["deberta", "chatgpt"]
-    )
-    parser.add_argument(
-        "--error_analysis", default=False, type=bool, choices=[False, True]
-    )
-    parser.add_argument(
-        "--visulize", action='store_true'
-    )
-    parser.add_argument(
-        "--split_l", default=0, type=int
-    )
-    parser.add_argument(
-        "--split_r", default=11, type=int
-    )
-    args = parser.parse_args()
-    if args.error_analysis:
-        os.environ["CHALLENGE_CONFIG_FILE"] = "configs/error_analysis_config.yaml"
-    else:
-        os.environ["CHALLENGE_CONFIG_FILE"] = "configs/objectnav_hm3d.yaml"
-    config_paths = os.environ["CHALLENGE_CONFIG_FILE"]
-    config = habitat.get_config(config_paths)
+# def main():
+#     parser = argparse.ArgumentParser()
+#     parser.add_argument(
+#         "--evaluation", default="local", type=str, choices=["local", "remote"]
+#     )
+#     parser.add_argument(
+#         "--PSL_infer", default="one_hot", type=str, choices=["optim", "one_hot"]
+#     )
+#     parser.add_argument(
+#         "--reasoning", default="both", type=str, choices=["both", "room", "obj"]
+#     )
+#     parser.add_argument(
+#         "--llm", default="deberta", type=str, choices=["deberta", "chatgpt"]
+#     )
+#     parser.add_argument(
+#         "--error_analysis", default=False, type=bool, choices=[False, True]
+#     )
+#     parser.add_argument(
+#         "--visulize", action='store_true'
+#     )
+#     parser.add_argument(
+#         "--split_l", default=0, type=int
+#     )
+#     parser.add_argument(
+#         "--split_r", default=11, type=int
+#     )
+#     args = parser.parse_args()
+#     if args.error_analysis:
+#         os.environ["CHALLENGE_CONFIG_FILE"] = "configs/error_analysis_config.yaml"
+#     else:
+#         os.environ["CHALLENGE_CONFIG_FILE"] = "configs/objectnav_hm3d.yaml"
+#     config_paths = os.environ["CHALLENGE_CONFIG_FILE"]
+#     config = habitat.get_config(config_paths)
 
-    agent = CLIP_LLM_FMMAgent_NonPano(task_config=config, args=args)
-    print("agent initialization complete")
+#     agent = CLIP_LLM_FMMAgent_NonPano(task_config=config, args=args)
+#     print("agent initialization complete")
 
-    if args.evaluation == "local":
-        print("Evaluate locally")
-        challenge = habitat.Challenge(eval_remote=False) #, split_l=args.split_l, split_r=args.split_r)
-    else:
-        print("Evaluate remotely")
-        challenge = habitat.Challenge(eval_remote=True)
+#     if args.evaluation == "local":
+#         print("Evaluate locally")
+#         challenge = habitat.Challenge(eval_remote=False) #, split_l=args.split_l, split_r=args.split_r)
+#     else:
+#         print("Evaluate remotely")
+#         challenge = habitat.Challenge(eval_remote=True)
 
-    agent.set_benchmark(challenge)
-    print(f"Starting evaluation...")
-    challenge.submit(agent)
+#     agent.set_benchmark(challenge)
+#     print(f"Starting evaluation...")
+#     challenge.submit(agent)
 
 
-if __name__ == "__main__":
-    main()
+# if __name__ == "__main__":
+#     main()

@@ -630,7 +630,8 @@ class SceneGraph():
                     llava_time = llava_time + 1
 
                     image_features = self.__get_image_features(image_crop_modified)
-
+                    # image_features.to("cuda:0")
+                    # print("Image features: ", image_features)
                     # print(f"LLaVa prompt: {self.prompt_llava}")
                     caption = self.chat(
                         # image=image_crop_modified, 
@@ -640,7 +641,11 @@ class SceneGraph():
 
                     print("\n")
                     caption = caption.replace('\n', '').replace('.', '').lower() # .replace(' ', '')
-                    caption = caption.split(' ')[-1]
+                    expression = caption.split(' ')
+                    
+                    if len(expression) > 1:
+                        caption = caption.split(' ')[-1]
+
                     print(f"Caption given by LLaVa: {caption}\n")                    
                     self.clear_line()
                     object['captions'].append(caption)
@@ -697,7 +702,7 @@ class SceneGraph():
                 gpt_prompt = self.prompt_gpt.format(caption, obj_goal)
                 # print("GPT Prompt", gpt_prompt)
                 response = self.llm(prompt=gpt_prompt)
-                response = caption + "is" + obj_goal # TODO: Delete this later
+                response = caption + " is " + obj_goal # TODO: Delete this later
                 print(f"Response by GPT: {response}\n")
                 self.clear_line()
                 node.reason = response
@@ -863,7 +868,7 @@ class SceneGraph():
     def llm(self, prompt):
         if self.llm_name == 'GPT':
             try:
-                client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+                client = OpenAI(api_key='') # os.getenv("OPENAI_API_KEY")
                 chat_completion = client.chat.completions.create(  # added by someone
                     model="gpt-3.5-turbo",
                     # model="gpt-4",  # gpt-4
