@@ -38,6 +38,7 @@ from conceptgraph.slam.mapping import (
     aggregate_similarities,
     merge_detections_to_objects
 )
+from .scenegraph_utils import *
 
 
 class RoomNode():
@@ -178,24 +179,21 @@ class SceneGraph():
             relationships in a indoor scene.
             You need to provide a spatial relationship between the several pairs of objects. Relationships
             include "next to", "above", "opposite to", "below", "inside", "behind", "in front of"
-            All the pairs of objects are provided line by line, and you also need to response to each
-            pair one by one with the same order. Here are 2 examples:
+            All the pairs of objects are provided in JSON fromat, and you also need to response to each
+            pair in JSON format and with the same order. Here are 2 examples:
             1.
             Input:
-            chair and table
-            monitor and desk
+            {"0": {"object1": "chair", "object2": "table"}, "1": {"object1": "monitor", "object2": "desk"}
             Response:
-            next to
-            above
+            {"0": "next to", "1": "above"}
             2.
             Input:
-            sofa and TV
-            plant and chair
+            {"0": {"object1": "sofa", "object2": "TV"}, "1": {"object1": "plant", "object2": "chair"}}
             Response:
-            opposite to
-            behind
+            {"0": "opposite to", "1": "behind"}
             Now you predict the spatial relationship between these pairs of objects:
         ''' # GPT give the relationship based on the given object nodes' caption.
+
         self.prompt_discriminate_relation = '''
             You are an AI assistant with commonsense and strong ability to judge whether the
             spatial relationship between the objects is correct or not.
@@ -214,6 +212,17 @@ class SceneGraph():
             spatial relationship correct?
         ''' # Does this relation make sense? LLaVa will answer this question.
         self.prompt_score_subgraph = '''
+            You are an AI assistant with commonsense and strong ability to infer the distance between two objects in an indoor
+            scene. 
+
+            You need to predict the most likely distance of two objects in a room. You need to answer the distance in meters and give
+            your reason. Here are 1 example:
+            Input:
+            {{"object1": "table", "object2": "chair"}}
+            Response:
+            {{"distance": 0.5, "reason": "because there is always a chair next to the table."}}
+
+            Now predict the distance and give your reason: {{"object1": {}, "object2": {}}}
         ''' # GPT give distance. For some reason, this prompt is never used since the related methon has been commented out.
         self.mask_generator = self.get_sam_mask_generator(self.sam_variant, self.device)
         self.clip_model, _, self.clip_preprocess = open_clip.create_model_and_transforms(
@@ -701,8 +710,8 @@ class SceneGraph():
 
                 gpt_prompt = self.prompt_gpt.format(caption, obj_goal)
                 # print("GPT Prompt", gpt_prompt)
-                response = self.llm(prompt=gpt_prompt)
-                response = caption + " is " + obj_goal # TODO: Delete this later
+                response = llm(prompt=gpt_prompt, llm_name=self.llm_name)
+                # response = "is" # TODO: Delete later
                 print(f"Response by GPT: {response}\n")
                 self.clear_line()
                 node.reason = response
@@ -742,25 +751,40 @@ class SceneGraph():
         for new_edge in new_edges:
             node_pairs.append(new_edge.node1.caption)
             node_pairs.append(new_edge.node2.caption)
-        prompt = self.prompt_edge_proposal + '{} and {}.\n' * len(new_edges)
-        prompt = prompt.format(*node_pairs)
-        # print(f"Edge proposal prompt to GPT: {prompt}")
-        relations = self.llm(prompt=prompt)
-        relations = relations.split('\n')
-        relations = ["next to" for _ in range(len(new_edges))] # TODO: Delete this later
-        print(f"Edge proposal {relations} is provided by GPT\n")
+        if len(node_pairs) == 0:
+            print("No node pair detected!")
+            return
 
+        # NOTE: Sometimes GPT will provide more relations and this will ruin the whole system
+        # NOTE: Sometimes GPT will provide some prefix things like "Response: " that will interrupt the relation
+        # prompt = self.prompt_edge_proposal + '{} and {}.\n' * len(new_edges)
+        # prompt = prompt.format(*node_pairs)
+        # print(f"Edge proposal prompt to GPT: {prompt}")
+        # relations = llm(prompt=prompt, llm_name=self.llm_name)
+        # # relations = ["next to"] * len(new_edges)
+        # start_index = relations.find(":") # discard "Response:"
+        # print("Response at: ", start_index)
+        # relations = relations.split('\n') 
+        # relations = relations[:len(new_edges)] if start_index == -1 else relations[1:len(new_edges)]
+        # for i, relation in enumerate(relations):
+        #     print("Assigning relation to the new edge")
+        #     new_edges[i].relation = relation
+        # self.clear_line()        
+
+        relations = get_relations_from_llm(node_pairs, self.prompt_edge_proposal, self.llm_name)
+        print(f"Edge proposal {relations} is provided by GPT\n")
+        print(f"Relations: {len(relations)}, new edges {len(new_edges)}")
         if len(relations) == len(new_edges):
-            for i, relation in enumerate(relations):
-                new_edges[i].relation = relation
-        # self.clear_line()
+            for key, relation in relations.items():
+                new_edges[int(key)].relation = relation
         # discriminate all relation proposals
         self.free_map = self.agent.fbe_free_map.cpu().numpy()[0,0,::-1].copy() > 0.5
         for i, new_edge in enumerate(new_edges):
             print(f'        discriminate_relation  {i}/{len(new_edges)}...')
+            print(f"New edge relation: {new_edge.relation}")
             if new_edge.relation == None or not self.discriminate_relation(new_edge):
                 new_edge.delete()
-            self.clear_line()
+            # self.clear_line()
         # get edges set
         self.edges = set()
         for node in self.nodes:
@@ -778,11 +802,13 @@ class SceneGraph():
 
             prompt = self.prompt_score_subgraph.format(subgraph_text, obj_goal)
             print("Score subgraph prompt to GPT: ", prompt)
-            response = self.llm(prompt=prompt)
-            print(f"Score subgraph result {response} given by GPT\n")
+            # response = llm(prompt=prompt, llm_name=self.llm_name)
+            # response = "1 test reason" # TODO: Delete later
+            distance, reason = get_subgraph_score_from_llm(prompt, self.llm_name)
+            print(f"Score subgraph result: {distance}, since {reason} given by GPT\n")
 
             # self.clear_line()
-            distance = response.split(' ')[0]
+            # distance = response.split(' ')[0]
             try:
                 distance = float(distance)
             except ValueError:
@@ -864,20 +890,6 @@ class SceneGraph():
         points_all = np.concatenate(points_all, axis=0)
         np.savetxt('', points_all)
         return
-    
-    def llm(self, prompt):
-        if self.llm_name == 'GPT':
-            try:
-                client = OpenAI(api_key='') # os.getenv("OPENAI_API_KEY")
-                chat_completion = client.chat.completions.create(  # added by someone
-                    model="gpt-3.5-turbo",
-                    # model="gpt-4",  # gpt-4
-                    messages=[{"role": "user", "content": prompt}],
-                    # timeout=10,  # Timeout in seconds
-                )
-                return chat_completion.choices[0].message.content
-            except:
-                return ''
             
     def clear_line(self):  
         sys.stdout.write('\033[F')
@@ -959,8 +971,8 @@ class SceneGraph():
             # discriminate occlusion
             n = 8
             for i in range(1, n):
-                x = x1 + (x2 - x1) * i / n
-                y = y1 + (y2 - y1) * i / n
+                x = int(x1 + (x2 - x1) * i / n)
+                y = int(y1 + (y2 - y1) * i / n)
                 if not self.free_map[y, x]:
                     return False
             return True

@@ -4,7 +4,7 @@ import argparse
 import yaml
 import numpy as np
 
-from decision.utils_glip import *
+from decision.glip_utils import *
 from decision.sg_nav import CLIP_LLM_FMMAgent_NonPano
 from decision.agent import dict_to_namespace
 
@@ -47,7 +47,7 @@ if __name__ == "__main__":
     test_data: dict = np.load("demos/test_data.npz", allow_pickle=True)
     keys = test_data.files
     print(keys)
-    for i in range(100):
+    for i in range(50):
         agent.reset()        
         for i in range(len(test_data[keys[0]])):
             observation = {}
@@ -56,6 +56,7 @@ if __name__ == "__main__":
                     continue
 
                 observation[key] = test_data[key][i]
+            print(f"Step: {i}")
             action: dict = agent.act(observation)
             print(action)
 
@@ -63,4 +64,4 @@ if __name__ == "__main__":
     #     for observations in test_data["data"]:
     #         action: dict = agent.act(observations)
     #         print(action)
-    # print("Test complete")
+    print("Test complete")

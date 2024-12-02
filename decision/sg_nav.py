@@ -18,7 +18,7 @@ from typing import List
 import quaternion
 from GLIP.maskrcnn_benchmark.engine.predictor_glip import GLIPDemo
 from GLIP.maskrcnn_benchmark.config import cfg as glip_cfg
-from decision.utils_glip import *
+from decision.glip_utils import *
 
 # import habitat
 # from habitat.core.agent import Agent
@@ -409,7 +409,6 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
             return {"action": 0}
         
         self.total_steps += 1
-        print(f"act {self.total_steps}")
         if self.navigate_steps == 0:
             self.obj_goal = projection[int(observations["objectgoal"])]
             self.prob_array_room = self.co_occur_room_mtx[self.goal_idx[self.obj_goal]]
@@ -451,7 +450,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
             save_image(torch.from_numpy(observations["depth"]/5).float().permute(2,0,1).float(), 'figures/dist/d'+str(self.navigate_steps)+'.png')
         
         # NOTE: Hardcoding to ajust the view angles of the semantic mapping modules
-        # NOTE: Initial 22 total steps seems fixed
+        # NOTE: Initial 22 total steps seems fixed, unable to define turn_right_2
         # look down twice and look around at first to initialize map
         if self.total_steps == 1:
             # look down
@@ -460,7 +459,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
             # self.observed_map_module.set_view_angles(30)
             return {"action": 5}
         elif self.total_steps <= 7:
-            return {"action": 4} # {"action": 6}
+            return {"action": 3} # {"action": 6}
         elif self.total_steps == 8:
             # look down
             self.sem_map_module.set_view_angles(60)
@@ -468,7 +467,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
             # self.observed_map_module.set_view_angles(60)
             return {"action": 5}
         elif self.total_steps <= 14:
-            return {"action": 4} # {"action": 6}
+            return {"action": 3} # {"action": 6}
         elif self.total_steps <= 15:
             self.sem_map_module.set_view_angles(30)
             self.free_map_module.set_view_angles(30)
@@ -487,7 +486,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
             room_detection_result = self.glip_demo.inference(observations["rgb"][:,:,[2,1,0]], rooms_captions)
             self.update_room_map(observations, room_detection_result)
             if not self.found_goal: # if found a goal, directly go to it
-                return {"action": 4} # {"action": 6}
+                return {"action": 3} # {"action": 6}
                     
         if not (observations["gps"] == self.last_gps).all():
             self.move_steps += 1
