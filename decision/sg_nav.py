@@ -15,6 +15,7 @@ from matplotlib import colors
 import colorsys
 from typing import List
 
+import cv2
 import quaternion
 from GLIP.maskrcnn_benchmark.engine.predictor_glip import GLIPDemo
 from GLIP.maskrcnn_benchmark.config import cfg as glip_cfg
@@ -139,7 +140,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         print('glip init finish!!!')
 
         ### ----- init some static variables ----- ###
-        self.map_size_cm = 4000
+        self.map_size_cm = 4000 
         self.resolution = self.map_resolution = 5
         self.camera_horizon = 0
         self.dilation_deg = 0
@@ -165,9 +166,9 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         print('FMM navigate map init finish!!!')
         
         ### ----- load commonsense from LLMs ----- ###
-        self.goal_idx = {}
-        for key in projection:
-            self.goal_idx[projection[key]] = categories_21.index(projection[key]) # each goal corresponding to which column in co-orrcurance matrix 
+        self.goal_idx, self.projection = {}, get_projection("habitat-challenge-data/data/hm3d/v2/val_mini.json.gz") # TODO: Put the path to yaml later
+        for key in self.projection:
+            self.goal_idx[self.projection[key]] = categories_21.index(self.projection[key]) # each goal corresponding to which column in co-orrcurance matrix 
         self.co_occur_mtx = np.load('ablations/npys/deberta_predict.npy')
         self.co_occur_mtx -= self.co_occur_mtx.min()
         self.co_occur_mtx /= self.co_occur_mtx.max() 
@@ -327,7 +328,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
                     bbox = self.current_obj_predictions.bbox[j].to(torch.int64)
                     center_point = (bbox[:2] + bbox[2:]) // 2
                     temp_direction = (center_point[0] - 320) * 79 / 640
-                    temp_distance = self.depth[center_point[1],center_point[0],0]
+                    temp_distance = self.depth[center_point[1], center_point[0], 0]
                     if temp_distance >= 4.999:
                         continue
                     obj_gps = self.get_goal_gps(observations, temp_direction, temp_distance)
@@ -362,11 +363,12 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
                         #     self.triple_found_goal = True
                         # self.double_found_goal = True
                         self.found_goal_times = self.found_goal_times + 1
-                    goal_gps = self.get_goal_gps(observations, shortest_distance_angle, shortest_distance)
+                    # goal_gps = self.get_goal_gps(observations, shortest_distance_angle, shortest_distance)
                     goal_xy = [int((self.map_size_cm/200+self.goal_gps[0])*100/self.resolution), int((self.map_size_cm/200+self.goal_gps[1])*100/self.resolution)]
                     verification_passed = self.scenegraph.verify_goal(goal_xy)
                     if verification_passed:
                         self.found_goal = True
+                        print("Found the goal!")
                     self.found_long_goal = False
                 
                 ## select the closest goal
@@ -398,19 +400,14 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         observations: 
         """ 
         # if self.total_steps >= 482:  # due to using turning 60 degree action at the beginning. 
-        # print(observations.keys())
-        # print("Prompts GPT", self.scenegraph.prompt_gpt)
-        # print("Prompts LLaVa", self.scenegraph.prompt_llava)
-        # print("Prompts edge proposal", self.scenegraph.prompt_edge_proposal)
-        # print("Prompts score subgraph", self.scenegraph.prompt_score_subgraph)
-        # print("Prompts discriminate relation", self.scenegraph.prompt_discriminate_relation)
-
         if self.total_steps >= 500:  # 230 is setted by someone
+            print("Exceed the max step, stop the agent...")
             return {"action": 0}
         
         self.total_steps += 1
         if self.navigate_steps == 0:
-            self.obj_goal = projection[int(observations["objectgoal"])]
+            self.obj_goal = self.projection[int(observations["objectgoal"])]
+            print(f"The object goal of this episode is {self.obj_goal}")
             self.prob_array_room = self.co_occur_room_mtx[self.goal_idx[self.obj_goal]]
             self.prob_array_obj = self.co_occur_mtx[self.goal_idx[self.obj_goal]]
             ## ADMM PSL optim only 
@@ -431,9 +428,14 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
                     data = pandas.DataFrame([[i, prob_array_obj_list[i]] for i in range(len(prob_array_obj_list))], columns = list(range(2)))
                     self.psl_model.get_predicate('ObjCooccur').add_data(Partition.OBSERVATIONS, data)
 
-        observations["depth"][observations["depth"]==0.5] = 100 # don't construct unprecise map with distance less than 0.5 m
-        self.depth = observations["depth"]
-        self.rgb = observations["rgb"][:,:,[2,1,0]]
+        observations["depth"] = observations["depth"] * 4.5 + 0.5
+        self.rgb = observations["rgb"] # [:,:,[2,1,0]] # BGR?        
+        cv2.imwrite(f"RGB.png", observations["rgb"])
+        depth_map_normalized = cv2.normalize(observations["depth"], None, 0, 255, cv2.NORM_MINMAX)
+        cv2.imwrite(f"Depth.png", depth_map_normalized)  
+
+        observations["depth"][observations["depth"] == 0.5] = 100 # don't construct unprecise map with distance less than 0.5 m        
+        self.depth = observations["depth"].reshape((480, 640, 1))
         observations["rgb_annotated"] = observations["rgb"]
 
         self.scenegraph.update_observation(observations) # VLM and LLM update scenegraph here
@@ -446,8 +448,8 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
             save_map = copy.deepcopy(torch.from_numpy(traversible))
             gray_map = torch.stack((save_map, save_map, save_map))
             save_image((gray_map / gray_map.max()), 'figures/map/img'+str(self.total_steps)+'.png')
-            save_image(torch.from_numpy(observations["rgb"]/255).float().permute(2,0,1), 'figures/rgb/img'+str(self.total_steps)+'.png')
-            save_image(torch.from_numpy(observations["depth"]/5).float().permute(2,0,1).float(), 'figures/dist/d'+str(self.navigate_steps)+'.png')
+            # save_image(torch.from_numpy(observations["rgb"]/255).float().permute(2,0,1), 'figures/rgb/img'+str(self.total_steps)+'.png')
+            # save_image(torch.from_numpy(observations["depth"]/5).float().permute(2,0,1).float(), 'figures/dist/d'+str(self.navigate_steps)+'.png')
         
         # NOTE: Hardcoding to ajust the view angles of the semantic mapping modules
         # NOTE: Initial 22 total steps seems fixed, unable to define turn_right_2
@@ -458,35 +460,35 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
             self.free_map_module.set_view_angles(30)
             # self.observed_map_module.set_view_angles(30)
             return {"action": 5}
-        elif self.total_steps <= 7:
-            return {"action": 3} # {"action": 6}
-        elif self.total_steps == 8:
+        elif self.total_steps <= 7: # 7:
+            return {"action": 6}
+        elif self.total_steps == 8: # 8:
             # look down
             self.sem_map_module.set_view_angles(60)
             self.free_map_module.set_view_angles(60)
             # self.observed_map_module.set_view_angles(60)
             return {"action": 5}
-        elif self.total_steps <= 14:
-            return {"action": 3} # {"action": 6}
-        elif self.total_steps <= 15:
+        elif self.total_steps <= 14: # 14:
+            return {"action": 6}
+        elif self.total_steps == 15: # 15:
             self.sem_map_module.set_view_angles(30)
             self.free_map_module.set_view_angles(30)
             # self.observed_map_module.set_view_angles(30)
             return {"action": 4} #
-        elif self.total_steps <= 16:
+        elif self.total_steps == 16: # 16:
             self.sem_map_module.set_view_angles(0)
             self.free_map_module.set_view_angles(0)
             # self.observed_map_module.set_view_angles(0)
             return {"action": 4}
         # get panoramic view at first
-        if self.total_steps <= 22 and not self.found_goal:
-            self.panoramic.append(observations["rgb"][:,:,[2,1,0]])
+        if self.total_steps <= 22 and not self.found_goal: # 22
+            self.panoramic.append(self.rgb) # observations["rgb"][:,:,[2,1,0]])
             self.panoramic_depth.append(observations["depth"])
             self.detect_objects(observations)
-            room_detection_result = self.glip_demo.inference(observations["rgb"][:,:,[2,1,0]], rooms_captions)
+            room_detection_result = self.glip_demo.inference(self.rgb, rooms_captions) # (observations["rgb"][:,:,[2,1,0]], rooms_captions) 
             self.update_room_map(observations, room_detection_result)
             if not self.found_goal: # if found a goal, directly go to it
-                return {"action": 3} # {"action": 6}
+                return {"action": 6}
                     
         if not (observations["gps"] == self.last_gps).all():
             self.move_steps += 1
@@ -503,7 +505,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
             ## perform object and room detection if have't found a goal
             self.detect_objects(observations)
             if self.total_steps % 2 == 0 and self.args.reasoning in ['both','room']:
-                room_detection_result = self.glip_demo.inference(observations["rgb"][:,:,[2,1,0]], rooms_captions)
+                room_detection_result = self.glip_demo.inference(self.rgb, rooms_captions) # (observations["rgb"][:,:,[2,1,0]], rooms_captions)
                 self.update_room_map(observations, room_detection_result)
           
         ### ------ generate action using FMM ------ ###
@@ -575,10 +577,11 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         
         # ------------------------------ visualization -------------------------
         if self.args.visulize:
+            print("Drawing the occupancy map...")
             save_map = copy.deepcopy(torch.from_numpy(traversible))
             gray_map = torch.stack((save_map, save_map, save_map))
             paper_obstacle_map = copy.deepcopy(gray_map)[:,1:-1,1:-1]
-            gray_map = self.visualize_scenegraph_map(gray_map)
+            # gray_map = self.visualize_scenegraph_map(gray_map)
             gray_map[:, int((self.map_size_cm/100-self.full_pose[1])*100/self.resolution)-2:int((self.map_size_cm/100-self.full_pose[1])*100/self.resolution)+2, int(self.full_pose[0]*100/self.resolution)-2:int(self.full_pose[0]*100/self.resolution)+2] = 0
             gray_map[0, int((self.map_size_cm/100-self.full_pose[1])*100/self.resolution)-2:int((self.map_size_cm/100-self.full_pose[1])*100/self.resolution)+2, int(self.full_pose[0]*100/self.resolution)-2:int(self.full_pose[0]*100/self.resolution)+2] = 1
             goal_size = 3 if self.found_goal else 2
@@ -628,6 +631,11 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
             #     'euclidean_distance: {}'.format(self.benchmark._env.current_episode.info['euclidean_distance']),
             # ]
             # paper_map_trans = self.add_text(paper_map_trans, text)
+            gray_map = gray_map.permute(1, 2, 0).numpy()
+            # save_map = save_map.numpy().reshape((save_map.shape[0], save_map.shape[1], 1))
+            save_map = cv2.normalize(gray_map, None, 0, 255, cv2.NORM_MINMAX)
+            cv2.imwrite("save_map.png", save_map)
+            print("occupancy_map saved")
             rgb = torch.cat([rgb, text_image], dim=1)
             self.agent_state_image = torch.cat([paper_map_trans, rgb], dim=2)
 
@@ -672,6 +680,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         unknown area: not free and not obstacle 
         select a frontier using commonsense and PSL and return a GPS
         """
+        print("Starting frontier explore...")
         fbe_map = torch.zeros_like(self.full_map[0,0])
         fbe_map[self.fbe_free_map[0,0]>0] = 1  # first free 
         fbe_map[skimage.morphology.binary_dilation(self.full_map[0,0].cpu().numpy(), skimage.morphology.disk(4))] = 3 # then dialte obstacle
@@ -739,7 +748,14 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
                 
 
         for node in self.scenegraph.nodes:
-            xy = np.array(node.object['xy']).reshape(1, 2)
+            # xy = np.array(node.object['xy']).reshape(1, 2)
+
+            if 'xy' in node.object.keys():
+                print("xy exists!")
+            else: 
+                print("xy does not exist!")
+
+            xy = np.array(node.center)
             distance = np.linalg.norm(xy - frontier_locations_16, axis=1)
             score = np.tile(np.array(node.score), (num_16_frontiers))
             score[distance > 1.6] = 0
@@ -826,6 +842,12 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         score_vec = torch.zeros((9)).to(self.device)
         for i, box in enumerate(bboxs):
             box = box.to(torch.int64)
+
+            # NOTE: I have to add this otherwise some error will happen
+            if new_room_labels[i] not in rooms:
+                print(f"{new_room_labels} not in rooms, agent in some unknow room")
+                continue
+
             idx = rooms.index(new_room_labels[i])
             type_mask[idx,box[1]:box[3],box[0]:box[2]] = 1
             score_vec[idx] = room_prediction_result.get_field("scores")[i]
@@ -856,7 +878,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         #Get traversible
         def add_boundary(mat, value=1):
             h, w = mat.shape
-            new_mat = np.zeros((h+2,w+2)) + value
+            new_mat = np.zeros((h+2,w+2)) + value # 2
             new_mat[1:h+1,1:w+1] = mat
             return new_mat
         

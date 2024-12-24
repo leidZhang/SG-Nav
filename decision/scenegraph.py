@@ -2,8 +2,9 @@ import os
 import sys
 import math
 import json
+import random
+from datetime import datetime
 from copy import deepcopy
-from collections import Counter 
 
 sys.path.append('/home/exx/Desktop/embodied_ai/concept-graphs')
 import cv2
@@ -72,6 +73,7 @@ class Node():
         for edge in list(self.edges):
             edge.delete()
         self.is_new_node = True
+
         self.caption = new_caption
         self.reason = None
         self.distance = 2
@@ -112,11 +114,13 @@ class SubGraph():
         for node in self.nodes:
             text = text + node.caption + '/'
             edges.update(node.edges)
-        text = text[:-1] + '\n'
+        # text = text[:-1] + '\n'
+        node_list, text = text[:-1].split('/'), ''
         for edge in edges:
             text = text + edge.relation + '/'
-        text = text[:-1]
-        return text
+        # text = text[:-1]
+        edge_list = text[:-1].split('/')
+        return node_list, edge_list
 
 
 class SceneGraph():
@@ -152,10 +156,22 @@ class SceneGraph():
             You find that the largest object in the picture is a dog
             Response: Dog 
             2. 
-            You find that the largest object in the picture is a whilte pipe
+            You find that the largest object in the picture is a white pipe
             Response: Pipe
         ''' # get the captions 
         self.prompt_gpt = '''
+            You are an AI assistant with commonsense and strong ability to infer the
+            distance between two objects in an indoor scene.
+            You need to predict the most likely distance of two objects in a room.
+            You need to answer the distance in meters and give your reason. Here is
+            the JSON format:
+            Input:
+            {{"object1": "table", "object2": "chair"}}
+            Response:
+            {{"distance": 0.50, "reason": "Because there is always a chair next to the table."}}
+            Now predict the distance and give your reason: {{"object1": {}, "object2": {}}}
+        '''
+        '''
             You are an AI assistant with commonsense and strong ability to compare the object and goal,
             then give the category relationship between them.
             You need to compare two given objects and give the category relationship between them.
@@ -179,8 +195,8 @@ class SceneGraph():
             relationships in a indoor scene.
             You need to provide a spatial relationship between the several pairs of objects. Relationships
             include "next to", "above", "opposite to", "below", "inside", "behind", "in front of"
-            All the pairs of objects are provided in JSON fromat, and you also need to response to each
-            pair in JSON format and with the same order. Here are 2 examples:
+            All the pairs of objects are provided in JSON fromat, and you need to provide a JSON result that
+            response to each pair in the format of "<number>": "<relationship>" with the same order. Here are 2 examples:
             1.
             Input:
             {"0": {"object1": "chair", "object2": "table"}, "1": {"object1": "monitor", "object2": "desk"}
@@ -212,17 +228,18 @@ class SceneGraph():
             spatial relationship correct?
         ''' # Does this relation make sense? LLaVa will answer this question.
         self.prompt_score_subgraph = '''
-            You are an AI assistant with commonsense and strong ability to infer the distance between two objects in an indoor
-            scene. 
+            You are an AI assistant with commonsense and strong ability to infer the distance between a subgraph
+            and a goal in an indoor scene. 
 
-            You need to predict the most likely distance of two objects in a room. You need to answer the distance in meters and give
-            your reason. Here are 1 example:
+            You need to predict the most likely distance of a subgraph and a goal in a room. You need to answer the distance in 
+            meters and give your reason in the format of {{"distance": <number>, "reason": <reason_string>}}. Here is the JSON format:
             Input:
-            {{"object1": "table", "object2": "chair"}}
-            Response:
-            {{"distance": 0.5, "reason": "because there is always a chair next to the table."}}
+            {{"subgraph": {{"nodes": ["sofa", "table", ...], "edges": ["sofa next to table", ...]}}, "goal": "TV"}}
+            Response: 
+            {{"distance": 2.00, "reason": "Becasue TV and sofa are on both sides of table."}}
 
-            Now predict the distance and give your reason: {{"object1": {}, "object2": {}}}
+            Now predict the distance and give your reason: 
+            {{"subgraph": {}, "goal": {}}}
         ''' # GPT give distance. For some reason, this prompt is never used since the related methon has been commented out.
         self.mask_generator = self.get_sam_mask_generator(self.sam_variant, self.device)
         self.clip_model, _, self.clip_preprocess = open_clip.create_model_and_transforms(
@@ -231,6 +248,376 @@ class SceneGraph():
         self.clip_model = self.clip_model.to(self.device)
         self.clip_tokenizer = open_clip.get_tokenizer("ViT-H-14")
         self.chat = LLaVA('liuhaotian/llava-v1.5-7b')
+
+    def update_observation(self, observations):
+        print(f'update_observation {self.agent.navigate_steps}...')
+        image_rgb = observations['rgb'].copy()
+        depth_array = observations['depth'].copy()
+        pose_matrix = self.get_pose_matrix(observations, self.agent.map_size_cm)
+
+        camera_matrix = self.agent.camera_matrix
+        K = np.array([
+            [camera_matrix.f, 0, camera_matrix.xc],
+            [0, camera_matrix.f, camera_matrix.zc],
+            [0, 0, 1]
+        ])
+
+        self.segment2d(image_rgb)
+        self.mapping3d(image_rgb, depth_array, cam_K=K, pose=pose_matrix) 
+        self.get_caption() 
+        self.update_node(self.agent.obj_goal)
+        self.update_edge(self.agent.obj_goal)
+        self.create_subgraphs(self.agent.obj_goal)
+        # self.clear_line() # temp disable
+
+    # BUG: for some reasone the width of the image changed
+    def segment2d(self, image_rgb):
+        print('    segement2d...')
+        print('        sam_segmentation...')
+
+        mask, xyxy, conf = self.get_sam_segmentation_dense(
+            self.sam_variant, self.mask_generator, image_rgb)
+        self.clear_line()
+        detections = Detections(
+            xyxy=xyxy,
+            confidence=conf,
+            class_id=np.zeros_like(conf).astype(int),
+            mask=mask,
+        )
+        with torch.no_grad():
+            print('        clip_feature...')
+            image_crops, image_feats, text_feats = self.compute_clip_features(
+                image_rgb, detections, self.clip_model, self.clip_preprocess, self.clip_tokenizer, self.classes, self.device)
+            self.clear_line()
+
+        image_appear_efficiency = [''] * len(image_crops)
+        self.segment2d_results.append({
+            "xyxy": detections.xyxy,
+            "confidence": detections.confidence,
+            "class_id": detections.class_id,
+            "mask": detections.mask,
+            "classes": self.classes,
+            "image_crops": image_crops,
+            "image_feats": image_feats,
+            "text_feats": text_feats,
+            "image_appear_efficiency": image_appear_efficiency,
+            "image_rgb": image_rgb,
+        })
+        
+        # self.clear_line() # temp disable
+
+    def mapping3d(self, image_rgb, depth_array, cam_K, pose):
+        # depth_array = depth_array[..., 0]
+        depth_array = depth_array.reshape(480, 640)
+
+        gobs = None # stands for grounded SAM observations
+
+        gobs = self.segment2d_results[-1]
+        
+        unt_pose = pose
+        
+        adjusted_pose = unt_pose
+            
+        idx = len(self.segment2d_results) - 1
+        print(depth_array.shape)
+        fg_detection_list, bg_detection_list = gobs_to_detection_list(
+            cfg = self.cfg,
+            image = image_rgb,
+            depth_array = depth_array,
+            cam_K = cam_K,
+            idx = idx,
+            gobs = gobs,
+            trans_pose = adjusted_pose,
+            class_names = self.classes,
+            BG_CLASSES = self.BG_CLASSES,
+            # is_navigation = self.is_navigation
+            # color_path = color_path,
+        ) # BUG: The image_rgb changed after this step
+
+        # TODO: For some reason I have to use this line, and no idea of the concequence
+        self.segment2d_results[-1]["image_rgb"] = image_rgb         
+        # print(f"Image size after gob {image_rgb.shape}")
+        # print(f"Image size after gob {self.segment2d_results[0]['image_rgb'].shape}")
+            
+        if len(fg_detection_list) == 0:
+            self.clear_line()
+            return
+            
+        if len(self.objects) == 0:
+            # Add all detections to the map
+            for i in range(len(fg_detection_list)):
+                self.objects.append(fg_detection_list[i])
+
+            # Skip the similarity computation 
+            self.objects_post = filter_objects(self.cfg, self.objects)
+            self.clear_line()
+            return
+                
+        print('        compute_spatial_similarities...')
+        spatial_sim = compute_spatial_similarities(self.cfg, fg_detection_list, self.objects)
+        self.clear_line()
+        print('        compute_visual_similarities...')
+        visual_sim = compute_visual_similarities(self.cfg, fg_detection_list, self.objects)
+        self.clear_line()
+        print('        aggregate_similarities...')
+        agg_sim = aggregate_similarities(self.cfg, spatial_sim, visual_sim)
+        self.clear_line()
+        
+        agg_sim[agg_sim < self.cfg.sim_threshold] = float('-inf')
+        spatial_sim[spatial_sim < self.cfg.sim_threshold_spatial] = float('-inf')
+        
+        self.objects = merge_detections_to_objects(self.cfg, fg_detection_list, self.objects, spatial_sim) 
+        self.objects_post = filter_objects(self.cfg, self.objects)
+        self.clear_line()
+            
+    def get_caption(self):
+        print('    get_caption...')
+        llava_time = 0
+        for idx, object in enumerate(self.objects_post):
+            conf = object["conf"]
+            conf = np.array(conf)
+            idx_most_conf = np.argsort(conf)[::-1]
+
+            features = []
+            captions = []
+            low_confidences = []
+            
+            image_list = []
+            caption_list = []
+            confidences_list = []
+            low_confidences_list = []
+            mask_list = []  # New list for masks
+            score_list = []
+
+            # print(f"idx most conf {idx_most_conf}")
+            idx_most_conf = idx_most_conf[:self.max_detections_per_object]
+
+            for idx_det in idx_most_conf:
+                if self.segment2d_results[object["image_idx"][idx_det]]['image_appear_efficiency'][object["mask_idx"][idx_det]] == '':
+                    image = self.segment2d_results[object["image_idx"][idx_det]]["image_rgb"]
+                    xyxy = object["xyxy"][idx_det]
+                    class_id = object["class_id"][idx_det]
+                    mask = object["mask"][idx_det]
+
+                    padding = 10
+                    x1, y1, x2, y2 = xyxy
+                    image_crop, mask_crop = self.crop_image_and_mask(image, mask, x1, y1, x2, y2, padding=padding)
+                    image_crop_modified = cv2.cvtColor(np.array(image_crop), cv2.COLOR_BGR2RGB) # image_crop # No modification
+                    if 'captions' not in object:
+                        object['captions'] = {}
+                    _w, _h = image_crop.size
+                    if _w * _h < 70 * 70: # or _w / _h >= 5 or _h / _w >= 5:
+                        low_confidences.append(True)
+                        score_list.append(0.5)
+                        continue
+                    else:
+                        low_confidences.append(False)
+
+
+                    self.chat.reset()
+                    print(f'        LLaVA {llava_time}...')
+                    llava_time = llava_time + 1
+
+                    image_features = self.__get_image_features(image_crop_modified)
+                    image_features.to("cuda:0")
+
+                    caption = self.chat(
+                        # image=image_crop_modified, 
+                        image_features=image_features,
+                        query=self.prompt_llava
+                    )  # added by someone
+
+                    caption = caption.replace('\n', '').replace('.', '').lower() # .replace(' ', '')
+                    expression = caption.split(' ')
+                    
+                    if len(expression) > 1:
+                        caption = caption.split(' ')[-1]
+                    # cv2.imwrite(f"{object['image_idx'][idx_det]}.jpg", np.array(image_crop_modified)) 
+                    # print(f"Caption given by LLaVa: {caption}")            
+       
+                    self.clear_line()
+                    object['captions'][caption] = 1 if caption not in object['captions'].keys() else object['captions'][caption] + 1
+                    self.segment2d_results[object["image_idx"][idx_det]]['image_appear_efficiency'][object["mask_idx"][idx_det]] = 'done'
+                        
+                    conf_value = conf[idx_det]
+                    image_list.append(image_crop)
+                    caption_list.append(caption)
+                    confidences_list.append(conf_value)
+                    low_confidences_list.append(low_confidences[-1])
+                    mask_list.append(mask_crop)  # Add the cropped mask
+
+        self.clear_line()
+        for i, obj in enumerate(self.objects_post):
+            print(f"{i}: {obj['captions']}") # {obj['xy']}
+        # self.clear_line()
+
+    def update_node(self, obj_goal):
+        print('    update_node...')
+        node_num_ori = len(self.nodes)
+        node_num_new = len(self.objects_post)
+        # update nodes
+        for i, node in enumerate(self.nodes):
+            caption_ori = node.caption
+            caption_new = find_modes(self.objects_post[i]['captions'])[0]
+            if caption_ori != caption_new:
+                node.update_caption(caption_new)
+        # add new nodes
+        for i in range(node_num_ori, node_num_new):
+            new_node = Node()
+            caption = find_modes(self.objects_post[i]['captions'])[0]
+            new_node.update_caption(caption)
+            new_node.object = self.objects_post[i]
+            self.nodes.add(new_node)
+        # get node.center and node.room
+        for node in self.nodes:
+            points = node.object['pcd'].points
+            points = np.asarray(points)
+            center = points.mean(axis=0)
+            x = int(center[0] * 100 / self.agent.resolution)
+            y = int(center[1] * 100 / self.agent.resolution)
+            y = self.agent.map_size - 1 - y
+            node.center = [x, y]
+
+            if abs(x) <= 800 and abs(y) <= 800: # Avoid index error
+                room_label = torch.where(self.agent.room_map[0, :, y, x]==1)[0]
+                if room_label.numel() == 1:
+                    room_label = room_label.item()
+                    if node.room_node:
+                        node.room_node.nodes.discard(node)
+                    node.room_node = self.room_nodes[room_label]
+                    node.room_node.nodes.add(node)                
+            else:
+                print(node.center, "is out of the map")
+
+
+        # score all the new nodes
+        for i, node in enumerate(self.nodes):
+            if not node.is_new_node:
+                continue
+
+            caption = node.caption
+            print(f'        LLM {i}/{len(self.nodes)}...')
+            try:
+                gpt_prompt = self.prompt_gpt.format(caption, obj_goal)
+                distance, reason = get_subgraph_score_from_llm(gpt_prompt, "GPT")
+                distance = distance.split(' ')[0]
+                distance = float(distance)
+            except Exception:
+                distance = 2.0
+                reason = ""
+            if distance < 0.1:
+                distance = 0.1
+
+            node.score = 1 / distance
+            # node.reason = reason                
+            # print(f"Distance between {node.caption} and {obj_goal} is {distance}")
+
+            # print("GPT Prompt", gpt_prompt)
+            # response = llm(prompt=gpt_prompt, llm_name=self.llm_name)
+            # print(f"Response by GPT: {response}")
+            # self.clear_line()
+        # self.clear_line()
+
+    def update_edge(self, obj_goal):
+        print('    update_edge...')
+        old_nodes = []
+        new_nodes = []
+        for i, node in enumerate(self.nodes):
+            if node.is_new_node:
+                new_nodes.append(node)
+                node.is_new_node = False
+            else:
+                old_nodes.append(node)
+        print(f"New nodes {len(new_nodes)}, old nodes {len(old_nodes)}")
+        # create the edge between new_node and old_node
+        for i, new_node in enumerate(new_nodes):
+            for j, old_node in enumerate(old_nodes):
+                new_edge = Edge(new_node, old_node)
+                new_node.edges.add(new_edge)
+                old_node.edges.add(new_edge)
+        # create the edge between new_node
+        for i, new_node1 in enumerate(new_nodes):
+            for j, new_node2 in enumerate(new_nodes[i + 1:]):
+                new_edge = Edge(new_node1, new_node2)
+                new_node1.edges.add(new_edge)
+                new_node2.edges.add(new_edge)
+        # get all new_edges
+        new_edges = set()
+        for i, node in enumerate(self.nodes):
+            node_new_edges = set(filter(lambda edge: edge.relation is None, node.edges))
+            new_edges = new_edges | node_new_edges
+        new_edges = list(new_edges)
+        # get all relation proposals
+        print(f'        LLM get all relation proposals...')
+        node_pairs = []
+        for new_edge in new_edges:
+            node_pairs.append(new_edge.node1.caption)
+            node_pairs.append(new_edge.node2.caption)
+        if len(node_pairs) == 0:
+            print("No node pair detected!")
+            return
+
+        # Potential bug: GPT may provide some wrong format!     
+        relations = get_relations_from_llm(node_pairs, self.prompt_edge_proposal, self.llm_name)
+
+        print(f"Edge proposal {relations}")
+        print(f"Relations: {len(relations)}, new edges {len(new_edges)}")
+        self.free_map = self.agent.fbe_free_map.cpu().numpy()[0,0,::-1].copy() > 0.5        
+        if len(relations) == len(new_edges):
+            for i, relation in enumerate(relations):
+                new_edges[i].relation = relation
+        # discriminate all relation proposals
+
+        for i, new_edge in enumerate(new_edges): 
+            print(f'        discriminate_relation  {i}/{len(new_edges)}...')
+            # print(f"New edge relation: {new_edge.relation}")
+            if new_edge.relation == None or not self.discriminate_relation(new_edge):
+                new_edge.delete()
+            self.clear_line()
+        # get edges set
+        self.edges = set()
+
+        for node in self.nodes:
+            self.edges.update(node.edges)
+        # self.clear_line()
+
+    # BUG: Sometimes the GPT will give wrong format!
+    def create_subgraphs(self, obj_goal):
+        print('    create_subgraphs...')
+        self.subgraphs.clear() 
+        print(f"Num of node: {len(self.nodes)}")
+        for node in self.nodes:
+            self.subgraphs.add(SubGraph(node))
+        for i, subgraph in enumerate(self.subgraphs):
+            subgraph_text = subgraph.get_subgraph_2_text()
+            # print(subgraph_text[0], subgraph_text[1])
+            if subgraph_text[0][0] == '' and subgraph_text[1][0] == '':
+                subgraph.score = 0.5 # Nothing in the subgraph
+                continue 
+            
+            print(f'        LLM {i}/{len(self.subgraphs)}...')
+            # print("Score subgraph prompt to GPT: ", prompt)
+            # response = llm(prompt=prompt, llm_name=self.llm_name)
+
+            # self.clear_line()
+            # distance = response.split(' ')[0]
+            try:
+                prompt = self.prompt_score_subgraph.format(subgraph_text, obj_goal)                
+                distance, reason = get_subgraph_score_from_llm(prompt, self.llm_name)
+                # print(f"Score subgraph result: {distance}, since {reason} given by GPT\n")             
+                distance = float(distance.split(' ')[0])
+            except json.JSONDecodeError:
+                print("GPT gave wrong format")
+                distance = 2
+            except ValueError:
+                print("GPT gave wrong format")
+                distance = 2
+            if distance < 0.1:
+                distance = 0.1
+            score = 1 / distance
+            subgraph.distance = distance
+            subgraph.score = score
+        self.clear_line()
 
     def init_room_nodes(self):
         room_nodes = []
@@ -487,360 +874,6 @@ class SceneGraph():
         ])
         return pose_matrix
 
-    # BUG: for some reasone the width of the image changed
-    def segment2d(self, image_rgb):
-        print('    segement2d...')
-        print('        sam_segmentation...')
-
-        mask, xyxy, conf = self.get_sam_segmentation_dense(
-            self.sam_variant, self.mask_generator, image_rgb)
-        self.clear_line()
-        detections = Detections(
-            xyxy=xyxy,
-            confidence=conf,
-            class_id=np.zeros_like(conf).astype(int),
-            mask=mask,
-        )
-        with torch.no_grad():
-            print('        clip_feature...')
-            image_crops, image_feats, text_feats = self.compute_clip_features(
-                image_rgb, detections, self.clip_model, self.clip_preprocess, self.clip_tokenizer, self.classes, self.device)
-            self.clear_line()
-
-        image_appear_efficiency = [''] * len(image_crops)
-        self.segment2d_results.append({
-            "xyxy": detections.xyxy,
-            "confidence": detections.confidence,
-            "class_id": detections.class_id,
-            "mask": detections.mask,
-            "classes": self.classes,
-            "image_crops": image_crops,
-            "image_feats": image_feats,
-            "text_feats": text_feats,
-            "image_appear_efficiency": image_appear_efficiency,
-            "image_rgb": image_rgb,
-        })
-        
-        # self.clear_line() # temp disable
-
-
-    def mapping3d(self, image_rgb, depth_array, cam_K, pose):
-        depth_array = depth_array[..., 0]
-
-        gobs = None # stands for grounded SAM observations
-
-        gobs = self.segment2d_results[-1]
-        
-        unt_pose = pose
-        
-        adjusted_pose = unt_pose
-            
-        idx = len(self.segment2d_results) - 1
-        fg_detection_list, bg_detection_list = gobs_to_detection_list(
-            cfg = self.cfg,
-            image = image_rgb,
-            depth_array = depth_array,
-            cam_K = cam_K,
-            idx = idx,
-            gobs = gobs,
-            trans_pose = adjusted_pose,
-            class_names = self.classes,
-            BG_CLASSES = self.BG_CLASSES,
-            # is_navigation = self.is_navigation
-            # color_path = color_path,
-        ) # BUG: The image_rgb changed after this step
-
-        # TODO: For some reason I have to use this line, and no idea of the concequence
-        self.segment2d_results[-1]["image_rgb"] = image_rgb 
-        # print(f"Image size after gob {image_rgb.shape}")
-        # print(f"Image size after gob {self.segment2d_results[0]['image_rgb'].shape}")
-            
-        if len(fg_detection_list) == 0:
-            self.clear_line()
-            return
-            
-        if len(self.objects) == 0:
-            # Add all detections to the map
-            for i in range(len(fg_detection_list)):
-                self.objects.append(fg_detection_list[i])
-
-            # Skip the similarity computation 
-            self.objects_post = filter_objects(self.cfg, self.objects)
-            self.clear_line()
-            return
-                
-        print('        compute_spatial_similarities...')
-        spatial_sim = compute_spatial_similarities(self.cfg, fg_detection_list, self.objects)
-        self.clear_line()
-        print('        compute_visual_similarities...')
-        visual_sim = compute_visual_similarities(self.cfg, fg_detection_list, self.objects)
-        self.clear_line()
-        print('        aggregate_similarities...')
-        agg_sim = aggregate_similarities(self.cfg, spatial_sim, visual_sim)
-        self.clear_line()
-        
-        agg_sim[agg_sim < self.cfg.sim_threshold] = float('-inf')
-        spatial_sim[spatial_sim < self.cfg.sim_threshold_spatial] = float('-inf')
-        
-        self.objects = merge_detections_to_objects(self.cfg, fg_detection_list, self.objects, spatial_sim)
-        
-        self.objects_post = filter_objects(self.cfg, self.objects)
-        self.clear_line()
-            
-            
-    def get_caption(self):
-        print('    get_caption...')
-        llava_time = 0
-        for idx, object in enumerate(self.objects_post):
-            conf = object["conf"]
-            conf = np.array(conf)
-            idx_most_conf = np.argsort(conf)[::-1]
-
-            features = []
-            captions = []
-            low_confidences = []
-            
-            image_list = []
-            caption_list = []
-            confidences_list = []
-            low_confidences_list = []
-            mask_list = []  # New list for masks
-            score_list = []
-
-            # print(f"idx most conf {idx_most_conf}")
-            idx_most_conf = idx_most_conf[:self.max_detections_per_object]
-            # print(f"Max detection per obj {self.max_detections_per_object}")
-
-            for idx_det in idx_most_conf:
-                if self.segment2d_results[object["image_idx"][idx_det]]['image_appear_efficiency'][object["mask_idx"][idx_det]] == '':
-                    image = self.segment2d_results[object["image_idx"][idx_det]]["image_rgb"]
-                    xyxy = object["xyxy"][idx_det]
-                    class_id = object["class_id"][idx_det]
-                    mask = object["mask"][idx_det]
-
-                    padding = 10
-                    x1, y1, x2, y2 = xyxy
-                    image_crop, mask_crop = self.crop_image_and_mask(image, mask, x1, y1, x2, y2, padding=padding)
-                    image_crop_modified = image_crop  # No modification
-
-                    if 'captions' not in object:
-                        object['captions'] = []
-                    _w, _h = image_crop.size
-                    if _w * _h < 70 * 70:
-                        low_confidences.append(True)
-                        score_list.append(0.5)
-                        continue
-                    else:
-                        low_confidences.append(False)
-
-
-                    self.chat.reset()
-                    print(f'        LLaVA {llava_time}...')
-                    llava_time = llava_time + 1
-
-                    image_features = self.__get_image_features(image_crop_modified)
-                    # image_features.to("cuda:0")
-                    # print("Image features: ", image_features)
-                    # print(f"LLaVa prompt: {self.prompt_llava}")
-                    caption = self.chat(
-                        # image=image_crop_modified, 
-                        image_features=image_features,
-                        query=self.prompt_llava
-                    )  # added by someone
-
-                    print("\n")
-                    caption = caption.replace('\n', '').replace('.', '').lower() # .replace(' ', '')
-                    expression = caption.split(' ')
-                    
-                    if len(expression) > 1:
-                        caption = caption.split(' ')[-1]
-
-                    print(f"Caption given by LLaVa: {caption}\n")                    
-                    self.clear_line()
-                    object['captions'].append(caption)
-                    self.segment2d_results[object["image_idx"][idx_det]]['image_appear_efficiency'][object["mask_idx"][idx_det]] = 'done'
-                        
-                
-                    conf_value = conf[idx_det]
-                    image_list.append(image_crop)
-                    caption_list.append(caption)
-                    confidences_list.append(conf_value)
-                    low_confidences_list.append(low_confidences[-1])
-                    mask_list.append(mask_crop)  # Add the cropped mask
-        # self.clear_line()
-
-    def update_node(self, obj_goal):
-        print('    update_node...')
-        node_num_ori = len(self.nodes)
-        node_num_new = len(self.objects_post)
-        # update nodes
-        for i, node in enumerate(self.nodes):
-            caption_ori = node.caption
-            caption_new = self.find_modes(self.objects_post[i]['captions'])[0]
-            if caption_ori != caption_new:
-                node.update_caption(caption_new)
-        # add new nodes
-        for i in range(node_num_ori, node_num_new):
-            new_node = Node()
-            caption = self.find_modes(self.objects_post[i]['captions'])[0]
-            new_node.update_caption(caption)
-            new_node.object = self.objects_post[i]
-            self.nodes.add(new_node)
-        # get node.center and node.room
-        for node in self.nodes:
-            points = node.object['pcd'].points
-            points = np.asarray(points)
-            center = points.mean(axis=0)
-            x = int(center[0] * 100 / self.agent.resolution)
-            y = int(center[1] * 100 / self.agent.resolution)
-            y = self.agent.map_size - 1 - y
-            node.center = [x, y]
-            room_label = torch.where(self.agent.room_map[0, :, y, x]==1)[0]
-            if room_label.numel() == 1:
-                room_label = room_label.item()
-                if node.room_node:
-                    node.room_node.nodes.discard(node)
-                node.room_node = self.room_nodes[room_label]
-                node.room_node.nodes.add(node)
-        # score all the new nodes
-        for i, node in enumerate(self.nodes):
-            if node.is_new_node:
-                caption = node.caption
-                print(f'        LLM {i}/{len(self.nodes)}...')
-
-                gpt_prompt = self.prompt_gpt.format(caption, obj_goal)
-                # print("GPT Prompt", gpt_prompt)
-                response = llm(prompt=gpt_prompt, llm_name=self.llm_name)
-                # response = "is" # TODO: Delete later
-                print(f"Response by GPT: {response}\n")
-                self.clear_line()
-                node.reason = response
-        # self.clear_line()
-
-    def update_edge(self, obj_goal):
-        print('    update_edge...')
-        old_nodes = []
-        new_nodes = []
-        for i, node in enumerate(self.nodes):
-            if node.is_new_node:
-                new_nodes.append(node)
-                node.is_new_node = False
-            else:
-                old_nodes.append(node)
-        # create the edge between new_node and old_node
-        for i, new_node in enumerate(new_nodes):
-            for j, old_node in enumerate(old_nodes):
-                    new_edge = Edge(new_node, old_node)
-                    new_node.edges.add(new_edge)
-                    old_node.edges.add(new_edge)
-        # create the edge between new_node
-        for i, new_node1 in enumerate(new_nodes):
-            for j, new_node2 in enumerate(new_nodes[i + 1:]):
-                new_edge = Edge(new_node1, new_node2)
-                new_node1.edges.add(new_edge)
-                new_node2.edges.add(new_edge)
-        # get all new_edges
-        new_edges = set()
-        for i, node in enumerate(self.nodes):
-            node_new_edges = set(filter(lambda edge: edge.relation is None, node.edges))
-            new_edges = new_edges | node_new_edges
-        new_edges = list(new_edges)
-        # get all relation proposals
-        print(f'        LLM get all relation proposals...')
-        node_pairs = []
-        for new_edge in new_edges:
-            node_pairs.append(new_edge.node1.caption)
-            node_pairs.append(new_edge.node2.caption)
-        if len(node_pairs) == 0:
-            print("No node pair detected!")
-            return
-
-        # NOTE: Sometimes GPT will provide more relations and this will ruin the whole system
-        # NOTE: Sometimes GPT will provide some prefix things like "Response: " that will interrupt the relation
-        # prompt = self.prompt_edge_proposal + '{} and {}.\n' * len(new_edges)
-        # prompt = prompt.format(*node_pairs)
-        # print(f"Edge proposal prompt to GPT: {prompt}")
-        # relations = llm(prompt=prompt, llm_name=self.llm_name)
-        # # relations = ["next to"] * len(new_edges)
-        # start_index = relations.find(":") # discard "Response:"
-        # print("Response at: ", start_index)
-        # relations = relations.split('\n') 
-        # relations = relations[:len(new_edges)] if start_index == -1 else relations[1:len(new_edges)]
-        # for i, relation in enumerate(relations):
-        #     print("Assigning relation to the new edge")
-        #     new_edges[i].relation = relation
-        # self.clear_line()        
-
-        relations = get_relations_from_llm(node_pairs, self.prompt_edge_proposal, self.llm_name)
-        print(f"Edge proposal {relations} is provided by GPT\n")
-        print(f"Relations: {len(relations)}, new edges {len(new_edges)}")
-        if len(relations) == len(new_edges):
-            for key, relation in relations.items():
-                new_edges[int(key)].relation = relation
-        # discriminate all relation proposals
-        self.free_map = self.agent.fbe_free_map.cpu().numpy()[0,0,::-1].copy() > 0.5
-        for i, new_edge in enumerate(new_edges):
-            print(f'        discriminate_relation  {i}/{len(new_edges)}...')
-            print(f"New edge relation: {new_edge.relation}")
-            if new_edge.relation == None or not self.discriminate_relation(new_edge):
-                new_edge.delete()
-            # self.clear_line()
-        # get edges set
-        self.edges = set()
-        for node in self.nodes:
-            self.edges.update(node.edges)
-        self.clear_line()
-
-    def create_subgraphs(self, obj_goal):
-        print('    create_subgraphs...')
-        self.subgraphs.clear() 
-        for node in self.nodes:
-            self.subgraphs.add(SubGraph(node))
-        for i, subgraph in enumerate(self.subgraphs):
-            subgraph_text = subgraph.get_subgraph_2_text()
-            print(f'        LLM {i}/{len(self.subgraphs)}...')
-
-            prompt = self.prompt_score_subgraph.format(subgraph_text, obj_goal)
-            print("Score subgraph prompt to GPT: ", prompt)
-            # response = llm(prompt=prompt, llm_name=self.llm_name)
-            # response = "1 test reason" # TODO: Delete later
-            distance, reason = get_subgraph_score_from_llm(prompt, self.llm_name)
-            print(f"Score subgraph result: {distance}, since {reason} given by GPT\n")
-
-            # self.clear_line()
-            # distance = response.split(' ')[0]
-            try:
-                distance = float(distance)
-            except ValueError:
-                distance = 2
-            if distance < 0.1:
-                distance = 0.1
-            score = 1 / distance
-            subgraph.distance = distance
-            subgraph.score = score
-        self.clear_line()
-
-    def update_observation(self, observations):
-        print(f'update_observation {self.agent.navigate_steps}...')
-        image_rgb = observations['rgb'].copy()
-        depth_array = observations['depth'].copy()
-        pose_matrix = self.get_pose_matrix(observations, self.agent.map_size_cm)
-
-        camera_matrix = self.agent.camera_matrix
-        K = np.array([
-            [camera_matrix.f, 0, camera_matrix.xc],
-            [0, camera_matrix.f, camera_matrix.zc],
-            [0, 0, 1]
-        ])
-
-        self.segment2d(image_rgb)
-        self.mapping3d(image_rgb, depth_array, cam_K=K, pose=pose_matrix) 
-        self.get_caption() 
-        self.update_node(self.agent.obj_goal)
-        self.update_edge(self.agent.obj_goal)
-        # self.create_subgraphs(self.agent.obj_goal)
-        # self.clear_line() # temp disable
-
     def get_scenegraph_object_list(self):
         scenegraph_object_list = []
         for node in self.nodes:
@@ -895,15 +928,6 @@ class SceneGraph():
         sys.stdout.write('\033[F')
         sys.stdout.write('\033[J')
         sys.stdout.flush()  
-
-    def find_modes(self, lst):  
-        if len(lst) == 0:
-            return ['object']
-        else:
-            counts = Counter(lst)  
-            max_count = max(counts.values())  
-            modes = [item for item, count in counts.items() if count == max_count]  
-            return modes  
     
     # TODO: Temp method, please check the main function in llava_model.py
     def __get_image_features(self, image):

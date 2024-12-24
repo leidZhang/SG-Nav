@@ -1,16 +1,20 @@
 import os
 import argparse
+from types import SimpleNamespace
 
 import yaml
 import numpy as np
 
 from decision.glip_utils import *
-from decision.sg_nav import CLIP_LLM_FMMAgent_NonPano
-from decision.agent import dict_to_namespace
+from decision import CLIP_LLM_FMMAgent_NonPano
+
+
+def dict_to_namespace(d):
+    # Recursively convert dicts to SimpleNamespace
+    return SimpleNamespace(**{k: dict_to_namespace(v) if isinstance(v, dict) else v for k, v in d.items()})
 
 
 if __name__ == "__main__":
-    # os.environ["CUDA_VISIBLE_DEVICES"] = "0"
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--evaluation", default="local", type=str, choices=["local", "remote"]
@@ -28,7 +32,7 @@ if __name__ == "__main__":
         "--error_analysis", default=False, type=bool, choices=[False, True]
     )
     parser.add_argument(
-        "--visulize", action='store_true'
+        "--visulize", default=True,
     )
     parser.add_argument(
         "--split_l", default=0, type=int
@@ -44,19 +48,22 @@ if __name__ == "__main__":
     config = dict_to_namespace(config_dict)
     agent = CLIP_LLM_FMMAgent_NonPano(config, args)
 
+
     test_data: dict = np.load("demos/test_data.npz", allow_pickle=True)
     keys = test_data.files
     print(keys)
-    for i in range(50):
+    for i in range(1):
         agent.reset()        
-        for i in range(len(test_data[keys[0]])):
+        for j in range(len(test_data[keys[0]])):
             observation = {}
             for key in keys:
                 if key == "semantic":
                     continue
 
-                observation[key] = test_data[key][i]
-            print(f"Step: {i}")
+                observation[key] = test_data[key][j]
+
+            # observation['depth'] = observation['depth'] # * 4.5 + 0.5
+            # observation['depth'] = observation['depth'].reshape((480, 640))
             action: dict = agent.act(observation)
             print(action)
 
@@ -64,4 +71,4 @@ if __name__ == "__main__":
     #     for observations in test_data["data"]:
     #         action: dict = agent.act(observations)
     #         print(action)
-    print("Test complete")
+    # print("Test complete")

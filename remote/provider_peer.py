@@ -15,14 +15,14 @@ from aiortc.contrib.media import MediaBlackhole
 
 from .comm_utils import (
     BaseAsyncComponent,
-    encode_to_rgba,
-    push_to_buffer,
-    force_codec
+    compress_image,
+    compress_depth,
+    compress_semantic,
 )
 from .signaling_utils import WebRTCClient, initiate_signaling
 
 # Copied from aiortc source code
-VIDEO_PTIME = 1 / 30
+VIDEO_PTIME = 1 / 10
 VIDEO_CLOCK_RATE = 90000
 VIDEO_TIME_BASE = fractions.Fraction(1, VIDEO_CLOCK_RATE)
 
@@ -37,6 +37,7 @@ class StateSender(BaseAsyncComponent):
     ) -> None:
         super().__init__()
         self.data_channel: RTCDataChannel = data_channel
+        self.data = {"reset": None, "step": -1}
 
     # NOTE: This function is copied from aiortc source code
     async def next_timestamp(self) -> Tuple[int, fractions.Fraction]:
@@ -50,16 +51,15 @@ class StateSender(BaseAsyncComponent):
         return self._timestamp, VIDEO_TIME_BASE
 
     async def send_state(self) -> None:
-        pts, _ = await self.next_timestamp()
-        data: dict = await self.loop.run_in_executor(
-            None, self.input_queue.get
-        )
-        data["pts"] = pts
-        print(f"Sending state at {data['pts']}")
-        self.data_channel.send(json.dumps(data))
+        # if self.input_queue.qsize() > 0:
+        data: dict = await self.loop.run_in_executor(None, self.input_queue.get)
 
-    def set_event(self, event: asyncio.Event) -> None:
-        self.event = event
+        if not data["reset"]:
+            data['rgb'] = compress_image(data['rgb'])
+            data['depth'] = compress_depth(data['depth'])
+            data['semantic'] = compress_semantic(data['semantic'])
+
+        self.data_channel.send(json.dumps(data))
 
 
 class RGBStreamTrack(VideoStreamTrack, BaseAsyncComponent):
@@ -67,17 +67,26 @@ class RGBStreamTrack(VideoStreamTrack, BaseAsyncComponent):
         super().__init__()
         self.last_frame: np.ndarray = np.zeros((2, 2, 3), dtype=np.uint8)
 
+    # NOTE: This function is copied from aiortc source code
+    async def next_timestamp(self) -> Tuple[int, fractions.Fraction]:
+        if hasattr(self, "_timestamp"):
+            self._timestamp += int(VIDEO_PTIME * VIDEO_CLOCK_RATE)
+            wait = self._start + (self._timestamp / VIDEO_CLOCK_RATE) - time.time()
+            await asyncio.sleep(wait)
+        else:
+            self._start = time.time()
+            self._timestamp = 0
+        return self._timestamp, VIDEO_TIME_BASE
+
     async def recv(self) -> VideoFrame:
         pts, time_base = await self.next_timestamp()
 
         # Convert frame to RGB
-        if self.input_queue.qsize() > 0:
-            frame: np.ndarray = await self.loop.run_in_executor(None, self.input_queue.get)
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            frame = np.ascontiguousarray(frame) # Make sure frame is contiguous in memory
-            self.last_frame = frame # Update last frame
-        else:
-            frame = self.last_frame # send the last frame if is not ready yet
+        # if self.input_queue.qsize() > 0:
+        frame: np.ndarray = await self.loop.run_in_executor(None, self.input_queue.get)
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        frame = np.ascontiguousarray(frame) # Make sure frame is contiguous in memory
+        # self.last_frame = frame # Update last frame
 
         # Create VideoFrame
         video_frame: VideoFrame = VideoFrame.from_ndarray(frame, format="rgb24")
@@ -91,24 +100,32 @@ class DepthStreamTrack(VideoStreamTrack, BaseAsyncComponent):
         super().__init__()
         self.last_image: np.ndarray = np.zeros((2, 2, 3), dtype=np.uint8)
 
+    # NOTE: This function is copied from aiortc source code
+    async def next_timestamp(self) -> Tuple[int, fractions.Fraction]:
+        if hasattr(self, "_timestamp"):
+            self._timestamp += int(VIDEO_PTIME * VIDEO_CLOCK_RATE)
+            wait = self._start + (self._timestamp / VIDEO_CLOCK_RATE) - time.time()
+            await asyncio.sleep(wait)
+        else:
+            self._start = time.time()
+            self._timestamp = 0
+        return self._timestamp, VIDEO_TIME_BASE
+
     async def recv(self) -> VideoFrame:
         pts, time_base = await self.next_timestamp()
 
         # Convert to RGB
-        if self.input_queue.qsize() > 0:
-            depth: np.ndarray = await self.loop.run_in_executor(None, self.input_queue.get)
-            image: np.ndarray = (depth * 255).astype(np.uint8) # Denormalize depth to 8 bits
-            image = np.repeat(image, 3, axis=-1) # Expand to 3 channels to increase the redundancy
-            image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR) # drop red channel since it is hight 8 bits
-            image = np.ascontiguousarray(image) # Make sure frame is contiguous in memory
-            self.last_image = image # Update last frame
-        else:
-            image = self.last_image # send the last frame if is not ready yet
+        # if self.input_queue.qsize() > 0:
+        depth: np.ndarray = await self.loop.run_in_executor(None, self.input_queue.get)
+        image: np.ndarray = (depth * 255).astype(np.uint8) # Denormalize depth to 8 bits
+        image = np.repeat(image, 3, axis=-1) # Expand to 3 channels to increase the redundancy
+        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR) # drop red channel since it is hight 8 bits
+        image = np.ascontiguousarray(image) # Make sure frame is contiguous in memory
 
         # Create VideoFrame
         video_frame: VideoFrame = VideoFrame.from_ndarray(image, format="bgr24")
         video_frame.pts, video_frame.time_base = pts, time_base
-        # print(f"VideoFrame PTS: {video_frame.pts}")
+        print(f"VideoFrame PTS: {video_frame.pts}")
 
         return video_frame
 
@@ -118,27 +135,36 @@ class SemanticStreamTrack(VideoStreamTrack, BaseAsyncComponent):
         super().__init__()
         self.last_image: np.ndarray = np.zeros((2, 2, 3), dtype=np.uint8)
 
+    # NOTE: This function is copied from aiortc source code
+    async def next_timestamp(self) -> Tuple[int, fractions.Fraction]:
+        if hasattr(self, "_timestamp"):
+            self._timestamp += int(VIDEO_PTIME * VIDEO_CLOCK_RATE)
+            wait = self._start + (self._timestamp / VIDEO_CLOCK_RATE) - time.time()
+            await asyncio.sleep(wait)
+        else:
+            self._start = time.time()
+            self._timestamp = 0
+        return self._timestamp, VIDEO_TIME_BASE
+
     async def recv(self) -> VideoFrame:
         pts, time_base = await self.next_timestamp()
 
         # Convert to RGB
-        if self.input_queue.qsize() > 0:
-            semantic: np.ndarray = await self.loop.run_in_executor(None, self.input_queue.get)
-            image: np.ndarray = np.repeat(semantic, 3, axis=-1)
-            image[:, :, 2] = image[:, :, 2] % 10
-            image[:, :, 1] = (image[:, :, 1] // 10) % 10
-            image[:, :, 0] = image[:, :, 0] // 100
-            image = (image * 255).astype(np.uint8)
-            image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-            image = np.ascontiguousarray(image) # Make sure frame is contiguous in memory
-            self.last_image = image # Update last frame
-        else:
-            image = self.last_image # send the last frame if is not ready yet
+        # if self.input_queue.qsize() > 0:
+        semantic: np.ndarray = await self.loop.run_in_executor(None, self.input_queue.get)
+        image: np.ndarray = np.repeat(semantic, 3, axis=-1)
+        image[:, :, 2] = image[:, :, 2] % 10
+        image[:, :, 1] = (image[:, :, 1] // 10) % 10
+        image[:, :, 0] = image[:, :, 0] // 100
+        image = (image * 255).astype(np.uint8)
+        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+        image = np.ascontiguousarray(image) # Make sure frame is contiguous in memory
+        # self.last_image = image # Update last frame
 
         # Create VideoFrame
         video_frame: VideoFrame = VideoFrame.from_ndarray(image, format="bgr24")
         video_frame.pts, video_frame.time_base = pts, time_base
-        # print(f"VideoFrame PTS: {video_frame.pts}")
+        print(f"VideoFrame PTS: {video_frame.pts}")
 
         return video_frame
 
@@ -191,20 +217,20 @@ class ProviderPeer(WebRTCClient):
             self.blackhole.addTrack(track)
             await self.blackhole.start()
 
-        rgb_track: VideoStreamTrack = RGBStreamTrack()
-        self.__set_async_components(rgb_track, self.rgb_queue)
-        rgb_sender: RTCRtpSender = self.pc.addTrack(rgb_track)
-        force_codec(self.pc, rgb_sender)
+        # rgb_track: VideoStreamTrack = RGBStreamTrack()
+        # self.__set_async_components(rgb_track, self.rgb_queue)
+        # rgb_sender: RTCRtpSender = self.pc.addTrack(rgb_track)
+        # force_codec(self.pc, rgb_sender)
 
-        depth_track: VideoStreamTrack = DepthStreamTrack()
-        self.__set_async_components(depth_track, self.depth_queue)
-        depth_sender: RTCRtpSender = self.pc.addTrack(depth_track)
-        force_codec(self.pc, depth_sender)
+        # depth_track: VideoStreamTrack = DepthStreamTrack()
+        # self.__set_async_components(depth_track, self.depth_queue)
+        # depth_sender: RTCRtpSender = self.pc.addTrack(depth_track)
+        # force_codec(self.pc, depth_sender)
 
-        semantic_track: VideoStreamTrack = SemanticStreamTrack()
-        self.__set_async_components(semantic_track, self.semantic_queue)
-        semantic_sender: RTCRtpSender = self.pc.addTrack(semantic_track)
-        force_codec(self.pc, semantic_sender)
+        # semantic_track: VideoStreamTrack = SemanticStreamTrack()
+        # self.__set_async_components(semantic_track, self.semantic_queue)
+        # semantic_sender: RTCRtpSender = self.pc.addTrack(semantic_track)
+        # force_codec(self.pc, semantic_sender)
 
     def __setup_datachannel_callbacks(self) -> None:
         self.data_channel = self.pc.createDataChannel("datachannel")

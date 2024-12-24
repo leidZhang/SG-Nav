@@ -5,6 +5,9 @@ import logging
 import argparse
 from queue import Queue
 from threading import Thread
+from typing import List
+from multiprocessing import Process
+from multiprocessing import Queue as MpQueue
 
 import yaml
 
@@ -14,28 +17,58 @@ from decision import (
     CLIP_LLM_FMMAgent_NonPano
 )
 from remote import ReceiverPeer
-from remote.receiver_peer import DataSynchonizer
 
 
 def start_distributed_sg_nav(
-    agent: CognitiveUnit,
-    observation_queue: Queue,
-    done: asyncio.Event,
-    complete_event: asyncio.Event,
-    loop: asyncio.AbstractEventLoop
+    comm_process: Thread,
+    config: dict, 
+    args: dict,
+    observation_queue: MpQueue,
+    action_queue: MpQueue
 ) -> None:
-    while not done.is_set():
+    last_step = None
+
+    core_agent: CLIP_LLM_FMMAgent_NonPano = CLIP_LLM_FMMAgent_NonPano(config, args)
+    agent: CognitiveUnit = CognitiveUnit(core_agent)
+    agent.set_queue('action', action_queue)
+    comm_process.start()
+
+    while True:
         observations: dict = observation_queue.get()
         if observations["reset"]:
             print("Reset signal received...")
             agent.reset()
             continue
 
-        agent.act(observations)
-        complete_event.set()
+        if last_step != observations['step']:
+            print("Executing step", observations['step'])
+            last_step = observations['step']
+            agent.act(observations)
 
-    loop.stop()
-    logging.info("Evaluation complete, waiting for finish...")
+
+def start_aiortc_peer(
+    loop: asyncio.AbstractEventLoop,
+    peer_config: dict,
+    mt_queue_names: List[str], 
+    mp_queue_names: List[str],
+    mp_queue_list: List[MpQueue]
+) -> None:
+    receiver: ReceiverPeer = ReceiverPeer(peer_config['signaling_ip'], peer_config['port'], peer_config['stun_url'])
+
+    receiver.set_loop(loop)
+    # synchronizer.done = receiver.done
+    for i, name in enumerate(mp_queue_names):
+        queue = MpQueue(peer_config['max_size'])
+        receiver.set_queue(name, mp_queue_list[i])
+        mp_queue_list.append(queue)
+
+    for name in mt_queue_names:
+        queue = asyncio.Queue(peer_config['max_size'])
+        receiver.set_queue(name, queue)
+
+    loop.create_task(receiver.run())
+    # synchronizer_thread.start()
+    loop.run_forever()
 
 
 if __name__ == "__main__":
@@ -57,7 +90,7 @@ if __name__ == "__main__":
         "--error_analysis", default=False, type=bool, choices=[False, True]
     )
     parser.add_argument(
-        "--visulize", action='store_true'
+        "--visulize", default=False, # action='store_true'
     )
     parser.add_argument(
         "--split_l", default=0, type=int
@@ -71,60 +104,39 @@ if __name__ == "__main__":
     with open(config_path, "r") as file:
         config_dict = yaml.safe_load(file)
     config: dict = dict_to_namespace(config_dict)
-    core_agent: CLIP_LLM_FMMAgent_NonPano = CLIP_LLM_FMMAgent_NonPano(config, args)
-    agent: CognitiveUnit = CognitiveUnit(core_agent)
-
     with open("ip_configs.json", "r") as f:
-        config: dict = json.load(f)
-    receiver: ReceiverPeer = ReceiverPeer(config['signaling_ip'], config['port'], config['stun_url'])
-    synchronizer: DataSynchonizer = DataSynchonizer()
+        peer_config: dict = json.load(f)
+
     loop: asyncio.AbstractEventLoop = asyncio.get_event_loop()
-    async_queue_names: list = ["rgb", "depth", "state", "semantic"]
-    queue_names: list = ["action", "step"]
+    mp_queue_names: list = ["action", "step"]
+    mp_queue_list: list = []    
+    mt_queue_names: list = ["rgb", "depth", "state", "semantic"]
+    for queue in mp_queue_names:
+        mp_queue_list.append(MpQueue(peer_config['max_size']))
 
-    receiver.set_loop(loop)
-    synchronizer.set_loop(loop)
-    synchronizer.done = receiver.done
-    for name in async_queue_names:
-        queue = asyncio.Queue(config['max_size'])
-        receiver.set_queue(name, queue)
-        synchronizer.set_queue(name, queue)
-    for name in queue_names:
-        queue = Queue(config['max_size'])
-        receiver.set_queue(name, queue)
-        synchronizer.set_queue(name, queue)
-    agent.set_queue('action', receiver.action_queue)
-
-    decision_thread: Thread = Thread(
-        target=start_distributed_sg_nav,
-        args=(
-            agent,
-            receiver.step_queue,
-            receiver.done,
-            receiver.action_event,
-            loop
+    comm_process: Process = Process(
+        target=start_aiortc_peer,
+        args = (
+            loop,
+            peer_config,
+            mt_queue_names,
+            mp_queue_names,
+            mp_queue_list
         )
     )
 
-    try:
-        loop.create_task(receiver.run())
-        loop.create_task(synchronizer.syncronize_to_step())
-        decision_thread.start()
-        loop.run_forever()
-    except KeyboardInterrupt:
-        print("Interrupted by user")
-    except Exception as e:
-        print(f"Error: {e}")
-    finally:
-        print("Closing receiver and loop...")
-        receiver.stop()
+    # sg_nav_process: Thread = Thread(
+    #     target=start_distributed_sg_nav,
+    #     args=(
+    #         config,
+    #         args,
+    #         mp_queue_list[1],
+    #         mp_queue_list[0]
+    #     )
+    # )
 
-        tasks = asyncio.all_tasks(loop)
-        for task in tasks:
-            task.cancel()
-        loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
+    # comm_process.start()
+    # sg_nav_process.start()
+    # start_aiortc_peer(loop, peer_config, mt_queue_names, mp_queue_names, mp_queue_list)
+    start_distributed_sg_nav(comm_process, config, args, mp_queue_list[1], mp_queue_list[0])
 
-        loop.stop()
-        loop.close()
-        decision_thread.join()
-        print("Program finished")

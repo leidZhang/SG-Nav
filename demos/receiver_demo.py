@@ -7,8 +7,9 @@ from queue import Queue
 from threading import Thread
 
 import cv2
+import numpy as np
 from remote import ReceiverPeer
-from remote.receiver_peer import DataSynchonizer
+from remote.receiver_peer import AsyncAligner
 from remote.comm_utils import push_to_buffer
 
 
@@ -20,26 +21,32 @@ def process_step_data(
     complete_event: asyncio.Event,
     loop: asyncio.AbstractEventLoop
 ) -> None:
-    last_step: int = None
+    last_step = None
 
     while not event.is_set():
         step_data: dict = step_queue.get()
+        print(step_data["reset"], step_data["step"])
+
         if step_data["reset"]:
+            last_step = step_data['step']
             print("Reset signal received, resetting...")
-            # last_step = None
             continue
 
-        print(f"Color: {step_data['depth'][0][0]}, PTS: {step_data['pts']}")
-        # cv2.imshow("RGB received", step_data["rgb"])
-        # cv2.imshow("Depth received", step_data["depth"])
-        # cv2.waitKey(30)
-        time.sleep(10)
-        # if last_step != step_data["step"]:
-        # last_step = step_data["step"]
-        action: dict = {"action": random.randint(0, 5)}
-        print(f"Putting {action} to the buffer...")
-        action_queue.put(action.copy())
-        complete_event.set()
+        if last_step != step_data['step']:
+            last_step = step_data['step']
+            cv2.imwrite(f"RGB.png", step_data["rgb"])
+            depth_map_uint8 = (step_data["depth"] * 255).astype(np.uint8)
+            cv2.imwrite(f"Depth.png", depth_map_uint8)
+            # cv2.imshow("RGB received", step_data["rgb"])
+            # cv2.imshow("Depth received", step_data["depth"])
+            # cv2.waitKey(30)
+
+            time.sleep(10) # Simulate processing time
+
+            action: dict = {"action": random.randint(0, 5)}
+            action_queue.put(action.copy())
+            print(f"Putting {action} to the buffer...")
+            complete_event.set()
 
     loop.stop()
     print("Test complete, waiting for finish...")
@@ -51,22 +58,17 @@ if __name__ == "__main__":
         config: dict = json.load(f)
 
     receiver: ReceiverPeer = ReceiverPeer(config['signaling_ip'], config['port'], config['stun_url'])
-    synchronizer: DataSynchonizer = DataSynchonizer()
     loop: asyncio.AbstractEventLoop = asyncio.get_event_loop()
-    async_queue_names: list = ["rgb", "depth", "state", "semantic"]
-    queue_names: list = ["action", "step"]
+    async_queue_names: list = [] + ["rgb", "depth", "state", "semantic"]
+    queue_names: list = ["action", "step"] # + ["rgb", "depth", "state", "semantic"]
 
     receiver.set_loop(loop)
-    synchronizer.set_loop(loop)
-    synchronizer.done = receiver.done
     for name in async_queue_names:
         queue = asyncio.Queue(config['max_size'])
         receiver.set_queue(name, queue)
-        synchronizer.set_queue(name, queue)
     for name in queue_names:
         queue = Queue(config['max_size'])
         receiver.set_queue(name, queue)
-        synchronizer.set_queue(name, queue)
 
     decision_thread: Thread = Thread(
         target=process_step_data,
@@ -79,9 +81,13 @@ if __name__ == "__main__":
         )
     )
 
+    # synchronizer_thread: Thread = Thread(
+    #     target=synchronizer.run
+    # )
+
     try:
         loop.create_task(receiver.run())
-        loop.create_task(synchronizer.syncronize_to_step())
+        # synchronizer_thread.start()
         decision_thread.start()
         loop.run_forever()
     except KeyboardInterrupt:

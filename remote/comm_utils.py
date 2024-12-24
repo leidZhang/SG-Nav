@@ -1,11 +1,13 @@
+import io
 import time
+import base64
 import asyncio
 from queue import Queue
 from abc import ABC
 from typing import Any, Union
 
 import numpy as np
-from av import VideoFrame
+from PIL import Image
 from aiortc import RTCRtpSender, RTCPeerConnection, RTCRtpCapabilities
 
 RGBA_CHANNELS: int = 4
@@ -50,7 +52,7 @@ def decode_to_depth(image: np.ndarray) -> np.ndarray:
         raise InvalidDataTypeError("Input image must be of type uint8")
 
     # Calculate the mean of the three channels to get the denormalized value
-    decoded_uint8: np.ndarray = np.mean(image, axis=2).astype(np.uint8)[..., None]
+    decoded_uint8: np.ndarray = np.mean(image, axis=2).astype(np.uint8)
     # Scale the uint8 value to the range [0, 1]
     return decoded_uint8.astype(np.float32) / 255.0
 
@@ -91,6 +93,38 @@ async def empty_async_queue(queue: asyncio.Queue) -> None:
     while not queue.empty():
         await queue.get()
     print(f"Current async queue size is {queue.qsize()}")
+
+
+def compress_image(image_array: np.ndarray) -> str:
+    if image_array.ndim == 3 and image_array.shape[2] == 1:
+        image_array = image_array[:, :, 0]
+    image: Image = Image.fromarray(image_array)
+    buffer: io.BytesIO = io.BytesIO()
+    image.save(buffer, format="PNG")
+    image_bytes: bytes = buffer.getvalue()
+    return base64.b64encode(image_bytes).decode('utf-8')
+
+def decompress_image(stringfied_image: str) -> np.ndarray:
+    image_bytes: bytes = base64.b64decode(stringfied_image)
+    buffer: io.BytesIO = io.BytesIO(image_bytes)
+    image: Image = Image.open(buffer)
+    return np.array(image)
+
+def compress_depth(depth_array: np.ndarray) -> str:
+    denormalized_depth: np.ndarray = (depth_array * 255).astype(np.uint8)
+    return compress_image(denormalized_depth)
+
+def decompress_depth(stringfied_depth: str) -> np.ndarray:
+    denormalized_depth: np.ndarray = decompress_image(stringfied_depth)
+    return denormalized_depth.astype(np.float32) / 255.0
+
+def compress_semantic(semantic_array: np.ndarray) -> str:
+    processed_semantic: np.ndarray = semantic_array.astype(np.uint16)
+    return compress_image(processed_semantic)
+
+def decompress_semantic(stringfied_semantic: str) -> np.ndarray:
+    processed_semantic: np.ndarray = decompress_image(stringfied_semantic)
+    return processed_semantic.astype(np.int32)
 
 
 class BaseAsyncComponent(ABC):

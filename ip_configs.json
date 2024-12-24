@@ -3,7 +3,7 @@
     "server_ip": "130.63.110.84",
     "port": 8765,
     "stun_url": ["stun:stun.l.google.com:19302"],
-    "max_size": 1,
+    "max_size": 3,
     "width": 640,
     "height": 480
 }

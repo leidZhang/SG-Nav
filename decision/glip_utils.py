@@ -20,7 +20,7 @@ with open('matterport_category_mappings.tsv') as file:
             else:
                 categories.append(line_[2])
                 categories_map[line_[2]] = line_[-1]
-        if line_[-1] not in categories_40 and line_[-1] is not 'objects' and 'void' not in line_[-1]:
+        if line_[-1] not in categories_40 and line_[-1] != 'objects' and 'void' not in line_[-1]:
             categories_40.append(line_[-1])
 
 
@@ -46,17 +46,29 @@ door_captions = 'doorway. hallway.'# v2
 
 # LLM reasoning prompt
 # room_prompt = "In which room will you most likely to find a "
+def get_projection(gz_file_path: str) -> dict:
+    with gzip.open(gz_file_path, 'r') as fin:        # 4. gzip
+        json_bytes = fin.read()                      # 3. bytes (i.e. UTF-8)
 
-with gzip.open("habitat-challenge-data/data/val/val.json.gz", 'r') as fin:        # 4. gzip
-    json_bytes = fin.read()                      # 3. bytes (i.e. UTF-8)
+    json_str = json_bytes.decode('utf-8')            # 2. string (i.e. JSON)
+    data = json.loads(json_str)
 
-json_str = json_bytes.decode('utf-8')            # 2. string (i.e. JSON)
-data = json.loads(json_str)
+    projection_reverse = data['category_to_task_category_id']
+    projection = {}
+    for key, item in projection_reverse.items():
+        projection[item] = key
+    return projection
 
-projection_reverse = data['category_to_task_category_id']
-projection = {}
-for key, item in projection_reverse.items():
-    projection[item] = key
+# with gzip.open("habitat-challenge-data/data/val/val.json.gz", 'r') as fin:        # 4. gzip
+#     json_bytes = fin.read()                      # 3. bytes (i.e. UTF-8)
+
+# json_str = json_bytes.decode('utf-8')            # 2. string (i.e. JSON)
+# data = json.loads(json_str)
+
+# projection_reverse = data['category_to_task_category_id']
+# projection = {}
+# for key, item in projection_reverse.items():
+#     projection[item] = key
 
 def get_iou(bb1, bb2):
     """
