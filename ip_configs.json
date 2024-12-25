@@ -1,0 +1,9 @@
+{
+    "signaling_ip": "localhost",
+    "server_ip": "localhost",
+    "port": 8765,
+    "stun_url": ["stun:stun.l.google.com:19302"],
+    "max_size": 3,
+    "width": 640,
+    "height": 480
+}

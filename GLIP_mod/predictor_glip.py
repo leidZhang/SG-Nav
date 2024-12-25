@@ -17,7 +17,9 @@ from maskrcnn_benchmark.modeling.roi_heads.mask_head.inference import Masker
 
 engine = inflect.engine()
 nltk.download('punkt')
+nltk.download('punkt_tab')
 nltk.download('averaged_perceptron_tagger')
+nltk.download('averaged_perceptron_tagger_eng')
 
 import timeit
 
